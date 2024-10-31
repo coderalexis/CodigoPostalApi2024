@@ -21,6 +21,7 @@ API to retrieve Zip Codes in Mexico.
 `GET http://127.0.0.1:8080/zip-code/06140`
 
 **Example Response:**
+
 ```json
 {
   "zip_code": "06140",
@@ -80,13 +81,12 @@ API to retrieve Zip Codes in Mexico.
     "municipality": "Cuautitlán Izcalli"
   }
 ]
+```
 
-
-
-
-## Error Response
+**Error Response**
 
 If a zip code is not found, a 404 HTTP code will be returned and an empty response will be displayed.
+
 ```json
 {
   "error": "No postal code found:100000000"
