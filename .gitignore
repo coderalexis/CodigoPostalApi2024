@@ -1,0 +1,96 @@
+HELP.md
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+
+# Archivos y carpetas generales de sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de configuración de Eclipse
+.project
+.classpath
+.settings/
+
+# Archivos de configuración de IntelliJ IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# Archivos de compilación de Maven y Gradle
+target/
+build/
+
+# Archivos y carpetas de logs
+*.log
+logs/
+*.log.*
+
+# Archivos de Spring Boot
+*.jar
+*.war
+*.ear
+
+# Archivos de configuración de sistema operativo
+*.swp
+.svn/
+*.swo
+
+# Archivos de configuración y variables de entorno
+.env
+*.env
+*.local
+
+# Archivos temporales y de respaldo
+*.bak
+*.tmp
+*.old
+*.swp
+
+# Dependencias descargadas localmente (opcional si usas un repositorio central como Maven Central)
+.mvn/
+
+# Archivos de configuraciones de editor
+.vscode/
+.idea/
+
+# Excluir configuraciones específicas de macOS
+.DS_Store
+
+# Archivos de IntelliJ para configuraciones y lanzamientos
+.idea
+*.iml
+
+# Archivos de ejecución y pruebas locales
+*.run/

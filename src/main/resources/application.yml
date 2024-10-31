@@ -1,0 +1,11 @@
+spring:
+  application:
+    name: CodigoPostalApi
+zipcode:
+  file:
+    path: C:/home/CPdescarga.txt
+server:
+  port: 8080
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
