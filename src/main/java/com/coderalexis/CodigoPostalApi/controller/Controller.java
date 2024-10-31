@@ -1,5 +1,6 @@
 package com.coderalexis.CodigoPostalApi.controller;
 
+import com.coderalexis.CodigoPostalApi.exceptions.ErrorResponse;
 import com.coderalexis.CodigoPostalApi.model.ZipCode;
 import com.coderalexis.CodigoPostalApi.service.ZipCodeService;
 import io.swagger.v3.oas.annotations.Operation;
@@ -9,9 +10,11 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
+import jakarta.validation.constraints.Pattern;
 import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -19,6 +22,7 @@ import java.util.List;
 @RestController
 @Slf4j
 @RequestMapping("/zip-codes")
+@Validated
 public class Controller {
 
     private final ZipCodeService zipCodeService;
@@ -28,12 +32,6 @@ public class Controller {
     }
 
     
-    /**
-     * Obtiene un ZipCode por su código postal.
-     *
-     * @param zipcode El código postal a buscar.
-     * @return Respuesta HTTP con el ZipCode o 404 si no se encuentra.
-     */
     @Operation(
             summary = "Obtiene información de un código postal",
             description = "Proporciona detalles del código postal solicitado."
@@ -49,21 +47,26 @@ public class Controller {
                     responseCode = "404",
                     description = "Código postal no encontrado",
                     content = @Content(mediaType = "application/json",
-                            schema = @Schema(implementation = ZipCode.class))
+                            schema = @Schema(implementation = ErrorResponse.class))
             )
     })
     @GetMapping("/{zipcode}")
-    public ResponseEntity<ZipCode> zipcodes(
+    public ResponseEntity<ZipCode> getZipCode(
             @Parameter(
                     description = "El código postal a buscar",
                     required = true,
                     example = "01000"
             )
-            @PathVariable("zipcode") String zipcode
+            @PathVariable("zipcode") 
+            @Pattern(regexp = "\\d{5}", message = "El código postal debe tener 5 dígitos")
+            String zipcode
     ) {
         ZipCode response = zipCodeService.getZipCode(zipcode);
-        return (response != null) ? ResponseEntity.ok(response) : ResponseEntity.notFound().build();
+        return ResponseEntity.ok(response);
     }
+    
+    
+    
 
     /**
      * Busca ZipCodes por coincidencia parcial en el nombre de la entidad federativa.
@@ -85,7 +88,8 @@ public class Controller {
             @ApiResponse(
                     responseCode = "404",
                     description = "No se encontraron códigos postales para la entidad federativa proporcionada",
-                    content = @Content(mediaType = "application/json")
+                    content = @Content(mediaType = "application/json",
+                            schema = @Schema(implementation = ErrorResponse.class))
             )
     })
     @GetMapping
@@ -98,10 +102,6 @@ public class Controller {
             @RequestParam("federal_entity") String federalEntity
     ) {
         List<ZipCode> results = zipCodeService.searchByFederalEntity(federalEntity);
-        if (results.isEmpty()) {
-            return ResponseEntity.notFound().build();
-        } else {
-            return ResponseEntity.ok(results);
-        }
+        return ResponseEntity.ok(results);
     }
 }

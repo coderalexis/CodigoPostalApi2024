@@ -16,7 +16,7 @@ public class SwaggerConfiguration {
         return new OpenAPI()
                 .info(new Info()
                         .title("API de Códigos Postales")
-                        .version("2.0.0")
+                        .version("2.0.1")
                         .description("API para consultar códigos postales y entidades federativas.")
                         .contact(new Contact()
                                 .name("Jose Alexis")

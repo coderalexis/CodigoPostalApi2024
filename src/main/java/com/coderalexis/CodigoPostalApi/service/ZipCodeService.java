@@ -1,6 +1,7 @@
 package com.coderalexis.CodigoPostalApi.service;
 
 
+import com.coderalexis.CodigoPostalApi.exceptions.ZipCodeNotFoundException;
 import com.coderalexis.CodigoPostalApi.model.Settlements;
 import com.coderalexis.CodigoPostalApi.model.ZipCode;
 import com.coderalexis.CodigoPostalApi.util.Util;
@@ -34,7 +35,11 @@ public class ZipCodeService {
      * @return El objeto ZipCode correspondiente o null si no se encuentra.
      */
     public ZipCode getZipCode(String zipcode) {
-        return mapZipCodes.get(zipcode);
+    	ZipCode zipCode = mapZipCodes.get(zipcode);
+        if (zipCode == null) {
+            throw new ZipCodeNotFoundException("Código postal no encontrado: "+zipcode);
+        }
+        return zipCode;
     }
 
 
@@ -100,18 +105,24 @@ public class ZipCodeService {
      * @return Lista de ZipCodes que coinciden con el término de búsqueda.
      */
     public List<ZipCode> searchByFederalEntity(String searchTerm) {
-        if (searchTerm == null || searchTerm.isEmpty()) {
-            return Collections.emptyList();
+    	if (searchTerm == null || searchTerm.isEmpty()) {
+            throw new IllegalArgumentException("El término de búsqueda no puede estar vacío");
         }
 
         String normalizedSearchTerm = Util.normalizeString(searchTerm);
-
-        return zipCodeList.stream()
+        
+        List<ZipCode> results = zipCodeList.stream()
                 .filter(zipCode -> {
                     String normalizedFederalEntity = Util.normalizeString(zipCode.getFederal_entity());
                     return normalizedFederalEntity != null && normalizedFederalEntity.contains(normalizedSearchTerm);
                 })
                 .collect(Collectors.toList());
+
+        if (results.isEmpty()) {
+            throw new ZipCodeNotFoundException("No se encontraron códigos postales para la entidad federativa: " + searchTerm);
+        }
+
+        return results;
     }
 
 
