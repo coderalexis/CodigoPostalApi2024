@@ -22,6 +22,8 @@ import java.util.stream.Stream;
 @Slf4j
 public class ZipCodeService {
 
+    private static final String LINE_SEPARATOR = Pattern.quote("|");
+
     private final Map<String, ZipCode> mapZipCodes = new HashMap<>();
     private final List<ZipCode> zipCodeList = new ArrayList<>();
 
@@ -59,8 +61,7 @@ public class ZipCodeService {
         try (Stream<String> lines = Files.lines(path, StandardCharsets.ISO_8859_1)) {
             lines.skip(2).forEach(line -> {
                 try {
-                    String separator = Pattern.quote("|");
-                    String[] words = line.split(separator);
+                    String[] words = line.split(LINE_SEPARATOR);
 
                     if (words.length >= 6) {
                         String zip_code_key = words[0];
@@ -70,6 +71,7 @@ public class ZipCodeService {
                             z.setZip_code(words[0]);
                             z.setLocality(words[4]);
                             z.setFederal_entity(words[5]);
+                            z.setNormalizedFederalEntity(Util.normalizeString(words[5]));
                             z.setMunicipality(words[3]);
                             z.setSettlements(new ArrayList<>());
                             zipCodeList.add(z);
@@ -111,9 +113,9 @@ public class ZipCodeService {
 
         String normalizedSearchTerm = Util.normalizeString(searchTerm);
         
-        List<ZipCode> results = zipCodeList.stream()
+        List<ZipCode> results = zipCodeList.parallelStream()
                 .filter(zipCode -> {
-                    String normalizedFederalEntity = Util.normalizeString(zipCode.getFederal_entity());
+                    String normalizedFederalEntity = zipCode.getNormalizedFederalEntity();
                     return normalizedFederalEntity != null && normalizedFederalEntity.contains(normalizedSearchTerm);
                 })
                 .collect(Collectors.toList());
