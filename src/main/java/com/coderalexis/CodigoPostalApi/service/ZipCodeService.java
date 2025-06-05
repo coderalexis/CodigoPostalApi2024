@@ -9,6 +9,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.core.io.ClassPathResource;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -22,11 +23,15 @@ import java.util.stream.Stream;
 @Slf4j
 public class ZipCodeService {
 
+    private static final String LINE_SEPARATOR = Pattern.quote("|");
+
     private final Map<String, ZipCode> mapZipCodes = new HashMap<>();
     private final List<ZipCode> zipCodeList = new ArrayList<>();
 
     @Value("${zipcode.file.path}")
     private String filePath;
+
+    private static final String RESOURCE_FILE = "CPdescarga.txt";
 
     /**
      * Obtiene un ZipCode por su código postal.
@@ -49,18 +54,39 @@ public class ZipCodeService {
     @PostConstruct
     public void loadZipCodes() {
 
+        InputStream stream = null;
         Path path = Paths.get(filePath);
 
-        if (!Files.exists(path)) {
-            log.error("El archivo de códigos postales no existe en la ruta especificada: {}", filePath);
-            return;
+        if (Files.exists(path)) {
+            try {
+                stream = Files.newInputStream(path);
+                log.info("Cargando códigos postales desde {}", filePath);
+            } catch (IOException e) {
+                log.error("Error al abrir el archivo {}", filePath, e);
+            }
         }
 
-        try (Stream<String> lines = Files.lines(path, StandardCharsets.ISO_8859_1)) {
+        if (stream == null) {
+            try {
+                ClassPathResource resource = new ClassPathResource(RESOURCE_FILE);
+                if (resource.exists()) {
+                    stream = resource.getInputStream();
+                    log.info("Cargando códigos postales desde recurso interno {}", RESOURCE_FILE);
+                } else {
+                    log.error("No se encontró el archivo {} ni en {}", RESOURCE_FILE, filePath);
+                    return;
+                }
+            } catch (IOException e) {
+                log.error("Error al cargar el recurso interno {}", RESOURCE_FILE, e);
+                return;
+            }
+        }
+
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.ISO_8859_1))) {
+            Stream<String> lines = reader.lines();
             lines.skip(2).forEach(line -> {
                 try {
-                    String separator = Pattern.quote("|");
-                    String[] words = line.split(separator);
+                    String[] words = line.split(LINE_SEPARATOR);
 
                     if (words.length >= 6) {
                         String zip_code_key = words[0];
@@ -70,6 +96,7 @@ public class ZipCodeService {
                             z.setZip_code(words[0]);
                             z.setLocality(words[4]);
                             z.setFederal_entity(words[5]);
+                            z.setNormalizedFederalEntity(Util.normalizeString(words[5]));
                             z.setMunicipality(words[3]);
                             z.setSettlements(new ArrayList<>());
                             zipCodeList.add(z);
@@ -111,9 +138,9 @@ public class ZipCodeService {
 
         String normalizedSearchTerm = Util.normalizeString(searchTerm);
         
-        List<ZipCode> results = zipCodeList.stream()
+        List<ZipCode> results = zipCodeList.parallelStream()
                 .filter(zipCode -> {
-                    String normalizedFederalEntity = Util.normalizeString(zipCode.getFederal_entity());
+                    String normalizedFederalEntity = zipCode.getNormalizedFederalEntity();
                     return normalizedFederalEntity != null && normalizedFederalEntity.contains(normalizedSearchTerm);
                 })
                 .collect(Collectors.toList());

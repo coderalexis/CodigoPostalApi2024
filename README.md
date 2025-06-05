@@ -96,7 +96,7 @@ If a zip code is not found, a 404 HTTP code will be returned and an empty respon
 ## Project Setup and Execution
 
 - To test the project, clone the repository and open it locally.
-- Ensure you have the `CPdescarga.txt` file in the `/home/` directory of your server. You can download it [here](https://www.correosdemexico.gob.mx/SSLServicios/ConsultaCP/CodigoPostal_Exportar.aspx).
+- Ensure you have the `CPdescarga.txt` file in `C:/home/CPdescarga.txt`. If the file does not exist there, the application will automatically use the copy bundled in its resources. You can download the file [here](https://www.correosdemexico.gob.mx/SSLServicios/ConsultaCP/CodigoPostal_Exportar.aspx).
 
 
 
