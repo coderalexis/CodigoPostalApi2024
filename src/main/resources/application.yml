@@ -1,11 +1,27 @@
 spring:
   application:
     name: CodigoPostalApi
+  cache:
+    type: caffeine
+    caffeine:
+      spec: maximumSize=500,expireAfterAccess=30m
+
 zipcode:
   file:
     path: C:/home/CPdescarga.txt
+
 server:
   port: 8080
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain
+    min-response-size: 1024
+
 springdoc:
   swagger-ui:
     path: /swagger-ui.html
+
+logging:
+  level:
+    com.coderalexis.CodigoPostalApi: INFO
+    org.springframework.web: WARN
