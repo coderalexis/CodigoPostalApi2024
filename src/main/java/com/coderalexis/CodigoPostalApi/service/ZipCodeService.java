@@ -9,6 +9,7 @@ import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.core.io.ClassPathResource;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -29,6 +30,8 @@ public class ZipCodeService {
 
     @Value("${zipcode.file.path}")
     private String filePath;
+
+    private static final String RESOURCE_FILE = "CPdescarga.txt";
 
     /**
      * Obtiene un ZipCode por su código postal.
@@ -51,14 +54,36 @@ public class ZipCodeService {
     @PostConstruct
     public void loadZipCodes() {
 
+        InputStream stream = null;
         Path path = Paths.get(filePath);
 
-        if (!Files.exists(path)) {
-            log.error("El archivo de códigos postales no existe en la ruta especificada: {}", filePath);
-            return;
+        if (Files.exists(path)) {
+            try {
+                stream = Files.newInputStream(path);
+                log.info("Cargando códigos postales desde {}", filePath);
+            } catch (IOException e) {
+                log.error("Error al abrir el archivo {}", filePath, e);
+            }
         }
 
-        try (Stream<String> lines = Files.lines(path, StandardCharsets.ISO_8859_1)) {
+        if (stream == null) {
+            try {
+                ClassPathResource resource = new ClassPathResource(RESOURCE_FILE);
+                if (resource.exists()) {
+                    stream = resource.getInputStream();
+                    log.info("Cargando códigos postales desde recurso interno {}", RESOURCE_FILE);
+                } else {
+                    log.error("No se encontró el archivo {} ni en {}", RESOURCE_FILE, filePath);
+                    return;
+                }
+            } catch (IOException e) {
+                log.error("Error al cargar el recurso interno {}", RESOURCE_FILE, e);
+                return;
+            }
+        }
+
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(stream, StandardCharsets.ISO_8859_1))) {
+            Stream<String> lines = reader.lines();
             lines.skip(2).forEach(line -> {
                 try {
                     String[] words = line.split(LINE_SEPARATOR);
