@@ -9,6 +9,10 @@ API to retrieve Zip Codes in Mexico.
 - [Spring Web](https://spring.io/guides/gs/rest-service/)
 - [Lombok](https://projectlombok.org/)
 - [Java 17](https://openjdk.java.net/projects/jdk/17/)
+- [Spring Boot Actuator](https://docs.spring.io/spring-boot/docs/current/actuator-api/htmlsingle/)
+- [Micrometer Prometheus](https://micrometer.io/)
+- [Prometheus](https://prometheus.io/)
+- [Grafana](https://grafana.com/)
 
 ## API Endpoints
 
@@ -152,6 +156,29 @@ Performance tests were conducted on the endpoint `http://127.0.0.1:8080/zip-code
 - The server successfully handled 100,000 requests without any errors.
 - Despite the high concurrency, the server responded efficiently with a rate of 6389.36 requests per second.
 - 99% of the requests were completed in 190 ms or less.
+
+## Metrics and Monitoring
+
+Spring Boot Actuator and Micrometer expose application metrics at
+`http://localhost:8080/actuator/prometheus`. The repository includes a
+`docker-compose.yml` and `prometheus.yml` to run the API together with
+Prometheus and Grafana.
+
+1. Start the stack:
+
+   ```bash
+   docker-compose up --build
+   ```
+
+2. Prometheus will be available at [http://localhost:9090](http://localhost:9090)
+   and Grafana at [http://localhost:3000](http://localhost:3000) (default login
+   `admin`/`admin`).
+
+3. In Grafana add Prometheus as a data source and import the "Spring Boot"
+   dashboard (for example, ID `7566`) to visualize CPU, memory usage and response
+   times.
+
+All Actuator endpoints remain accessible under `http://localhost:8080/actuator`.
 
 
 

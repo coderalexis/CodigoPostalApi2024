@@ -25,3 +25,16 @@ logging:
   level:
     com.coderalexis.CodigoPostalApi: INFO
     org.springframework.web: WARN
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: '*'
+  endpoint:
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
