@@ -32,6 +32,8 @@ build/
 ### VS Code ###
 .vscode/
 
+### Claude Code ###
+.claude/
 
 # Archivos y carpetas generales de sistema
 .DS_Store

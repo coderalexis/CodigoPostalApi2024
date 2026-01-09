@@ -1,18 +1,25 @@
 package com.coderalexis.CodigoPostalApi.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
-import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
+import lombok.NoArgsConstructor;
 
-import java.util.ArrayList;
+import java.util.List;
 
 @Data
+@NoArgsConstructor
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class ZipCode {
-    private String zip_code;
+    @JsonProperty("zip_code")
+    private String zipCode;
+
     private String locality;
-    private String federal_entity;
-    // Eliminar normalizedFederalEntity - ya no es necesario
-    private ArrayList<Settlements> settlements;
+
+    @JsonProperty("federal_entity")
+    private String federalEntity;
+
     private String municipality;
+
+    private List<Settlements> settlements;
 }

@@ -1,0 +1,75 @@
+# ========================================
+# PERFIL DE PRODUCCIÓN
+# ========================================
+# Uso: java -jar app.jar --spring.profiles.active=prod
+# O con variable de entorno: SPRING_PROFILE=prod
+
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+# Rate limiting estricto en producción
+ratelimit:
+  enabled: true
+  requests-per-minute: 100  # 100 peticiones por minuto por IP
+  ip-based: true
+  burst-capacity: 20  # Permite ráfagas de hasta 20 peticiones
+  whitelist:
+    - 127.0.0.1  # Localhost siempre permitido
+    - 10.0.0.0/8  # Redes privadas (opcional)
+
+# Actuator mínimo y seguro
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus  # Solo health y métricas
+  endpoint:
+    health:
+      show-details: never  # NUNCA mostrar detalles en producción
+      show-components: never
+  server:
+    port: 9090  # Puerto separado para métricas (mejor práctica)
+
+# Logging mínimo en producción
+logging:
+  level:
+    com.coderalexis.CodigoPostalApi: WARN
+    org.springframework.web: ERROR
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - [PROD] - %msg%n"
+  file:
+    name: /var/log/codigopostal-api/application.log
+    max-size: 10MB
+    max-history: 30
+
+# Servidor con errores ocultos
+server:
+  error:
+    include-message: never  # NUNCA incluir mensajes de error internos
+    include-stacktrace: never
+    include-exception: false
+    include-binding-errors: never
+    whitelabel:
+      enabled: false  # Deshabilitar página de error por defecto
+
+# Compresión optimizada
+server:
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain
+    min-response-size: 512  # Comprimir respuestas > 512 bytes
+
+# Seguridad adicional
+server:
+  shutdown: graceful  # Apagado graceful
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+# Caché optimizado para producción
+spring:
+  cache:
+    caffeine:
+      spec: maximumSize=10000,expireAfterAccess=1h,recordStats

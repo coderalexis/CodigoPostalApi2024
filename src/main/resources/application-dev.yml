@@ -1,0 +1,45 @@
+# ========================================
+# PERFIL DE DESARROLLO (DEV)
+# ========================================
+# Uso: mvn spring-boot:run -Dspring-boot.run.profiles=dev
+# O con variable de entorno: SPRING_PROFILE=dev
+
+spring:
+  config:
+    activate:
+      on-profile: dev
+
+# Sin rate limiting en desarrollo
+ratelimit:
+  enabled: false
+  requests-per-minute: 999999  # Sin límite práctico
+  ip-based: false
+
+# Actuator totalmente abierto para desarrollo
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"  # Todos los endpoints disponibles en dev
+  endpoint:
+    health:
+      show-details: always  # Siempre mostrar detalles
+      show-components: always
+
+# Logging más detallado
+logging:
+  level:
+    com.coderalexis.CodigoPostalApi: DEBUG
+    org.springframework.web: INFO
+    org.springframework.cache: DEBUG
+
+# Servidor
+server:
+  error:
+    include-message: always
+    include-stacktrace: always
+    include-exception: true
+    include-binding-errors: always
+
+# Banner personalizado para identificar el ambiente
+spring.banner.location: classpath:banner-dev.txt

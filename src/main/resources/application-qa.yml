@@ -1,0 +1,52 @@
+# ========================================
+# PERFIL DE QA/TESTING
+# ========================================
+# Uso: mvn spring-boot:run -Dspring-boot.run.profiles=qa
+# O con variable de entorno: SPRING_PROFILE=qa
+
+spring:
+  config:
+    activate:
+      on-profile: qa
+
+# Rate limiting moderado para pruebas realistas
+ratelimit:
+  enabled: true
+  requests-per-minute: 1000  # 1000 peticiones por minuto
+  ip-based: true
+  burst-capacity: 50  # Permite ráfagas de hasta 50 peticiones
+
+# Actuator parcialmente abierto
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics,env,configprops
+  endpoint:
+    health:
+      show-details: when-authorized
+      show-components: when-authorized
+    env:
+      enabled: true
+
+# Logging intermedio
+logging:
+  level:
+    com.coderalexis.CodigoPostalApi: INFO
+    org.springframework.web: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - [QA] - %msg%n"
+
+# Servidor con errores controlados
+server:
+  error:
+    include-message: always
+    include-stacktrace: on-param  # Solo con ?trace=true
+    include-exception: false
+    include-binding-errors: always
+
+# Caché con TTL más corto para pruebas
+spring:
+  cache:
+    caffeine:
+      spec: maximumSize=5000,expireAfterAccess=10m

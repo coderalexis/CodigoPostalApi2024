@@ -1,0 +1,19 @@
+# Configuración para tests
+spring:
+  config:
+    activate:
+      on-profile: test
+
+zipcode:
+  file:
+    path: CPdescarga.txt
+
+# Desactivar rate limiting en tests
+ratelimit:
+  enabled: false
+
+# Logging reducido para tests
+logging:
+  level:
+    com.coderalexis.CodigoPostalApi: WARN
+    org.springframework: WARN
