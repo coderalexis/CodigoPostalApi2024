@@ -2,6 +2,8 @@ package com.coderalexis.CodigoPostalApi.service;
 
 import com.coderalexis.CodigoPostalApi.config.MetricsConfiguration;
 import com.coderalexis.CodigoPostalApi.exceptions.ZipCodeNotFoundException;
+import com.coderalexis.CodigoPostalApi.model.AdvancedSearchRequest;
+import com.coderalexis.CodigoPostalApi.model.FederalEntity;
 import com.coderalexis.CodigoPostalApi.model.Settlements;
 import com.coderalexis.CodigoPostalApi.model.ZipCode;
 import com.coderalexis.CodigoPostalApi.model.ZipCodeStats;
@@ -315,5 +317,243 @@ public class ZipCodeService {
                 .totalMunicipalities(zipCodesByNormalizedMunicipality.size())
                 .totalSettlements(totalSettlements)
                 .build();
+    }
+
+    /**
+     * Búsqueda parcial de códigos postales.
+     * Permite buscar con códigos incompletos (ej: "010" encuentra "01000", "01010", etc.)
+     *
+     * @param partialCode Código postal parcial (mínimo 1 dígito)
+     * @param limit Número máximo de resultados (default 10, max 50)
+     * @return Lista de códigos postales que coinciden con el prefijo
+     */
+    @Cacheable(value = "partialSearch", key = "#partialCode + '_' + #limit")
+    public List<ZipCode> searchByPartialCode(String partialCode, int limit) {
+        Timer.Sample sample = metricsConfiguration.startTimer();
+        try {
+            metricsConfiguration.recordZipCodeSearch("partial:" + partialCode);
+
+            if (partialCode == null || partialCode.trim().isEmpty()) {
+                metricsConfiguration.recordSearchError("partial", "empty_search");
+                throw new IllegalArgumentException("El código postal parcial no puede estar vacío");
+            }
+
+            String cleanCode = partialCode.trim();
+
+            // Validar que solo contenga dígitos
+            if (!cleanCode.matches("\\d+")) {
+                metricsConfiguration.recordSearchError("partial", "invalid_format");
+                throw new IllegalArgumentException("El código postal solo debe contener dígitos");
+            }
+
+            // Limitar el tamaño del resultado
+            int effectiveLimit = Math.min(Math.max(limit, 1), 50);
+
+            List<ZipCode> results = zipCodesByCode.entrySet().parallelStream()
+                    .filter(entry -> entry.getKey().startsWith(cleanCode))
+                    .map(Map.Entry::getValue)
+                    .sorted(Comparator.comparing(ZipCode::getZipCode))
+                    .limit(effectiveLimit)
+                    .collect(Collectors.toList());
+
+            if (results.isEmpty()) {
+                metricsConfiguration.recordSearchError("partial", "not_found");
+                throw new ZipCodeNotFoundException(
+                        "No se encontraron códigos postales que inicien con: " + partialCode
+                );
+            }
+
+            metricsConfiguration.recordResultSize("partial", results.size());
+            return results;
+        } finally {
+            metricsConfiguration.recordSearchDuration(sample, "partial");
+        }
+    }
+
+    /**
+     * Obtiene la lista de todas las entidades federativas (estados) de México.
+     *
+     * @return Lista de entidades federativas con sus estadísticas
+     */
+    @Cacheable(value = "federalEntities")
+    public List<FederalEntity> getAllFederalEntities() {
+        Timer.Sample sample = metricsConfiguration.startTimer();
+        try {
+            // Agrupar códigos postales por entidad federativa original (no normalizada)
+            Map<String, List<ZipCode>> zipCodesByEntity = zipCodesByCode.values().stream()
+                    .collect(Collectors.groupingBy(ZipCode::getFederalEntity));
+
+            List<FederalEntity> entities = zipCodesByEntity.entrySet().stream()
+                    .map(entry -> {
+                        String entityName = entry.getKey();
+                        List<ZipCode> zipCodes = entry.getValue();
+
+                        // Contar municipios únicos para esta entidad
+                        long municipalitiesCount = zipCodes.stream()
+                                .map(ZipCode::getMunicipality)
+                                .distinct()
+                                .count();
+
+                        return FederalEntity.builder()
+                                .name(entityName)
+                                .zipCodesCount(zipCodes.size())
+                                .municipalitiesCount((int) municipalitiesCount)
+                                .build();
+                    })
+                    .sorted(Comparator.comparing(FederalEntity::getName))
+                    .collect(Collectors.toList());
+
+            metricsConfiguration.recordResultSize("federal_entities", entities.size());
+            return entities;
+        } finally {
+            metricsConfiguration.recordSearchDuration(sample, "federal_entities");
+        }
+    }
+
+    /**
+     * Obtiene la lista de municipios de una entidad federativa específica.
+     *
+     * @param federalEntity Nombre de la entidad federativa
+     * @return Lista de nombres de municipios
+     */
+    @Cacheable(value = "municipalitiesByEntity", key = "#federalEntity.toLowerCase()")
+    public List<String> getMunicipalitiesByFederalEntity(String federalEntity) {
+        Timer.Sample sample = metricsConfiguration.startTimer();
+        try {
+            if (federalEntity == null || federalEntity.trim().isEmpty()) {
+                throw new IllegalArgumentException("La entidad federativa no puede estar vacía");
+            }
+
+            String normalizedSearchTerm = Util.normalizeString(federalEntity.trim());
+
+            // Buscar la entidad y obtener sus municipios únicos
+            List<String> municipalities = zipCodesByNormalizedEntity.entrySet().parallelStream()
+                    .filter(entry -> entry.getKey().contains(normalizedSearchTerm))
+                    .flatMap(entry -> entry.getValue().stream())
+                    .map(ZipCode::getMunicipality)
+                    .distinct()
+                    .sorted()
+                    .collect(Collectors.toList());
+
+            if (municipalities.isEmpty()) {
+                throw new ZipCodeNotFoundException(
+                        "No se encontraron municipios para la entidad federativa: " + federalEntity
+                );
+            }
+
+            metricsConfiguration.recordResultSize("municipalities_by_entity", municipalities.size());
+            return municipalities;
+        } finally {
+            metricsConfiguration.recordSearchDuration(sample, "municipalities_by_entity");
+        }
+    }
+
+    /**
+     * Obtiene las colonias/asentamientos de un código postal específico.
+     *
+     * @param zipcode Código postal de 5 dígitos
+     * @return Lista de asentamientos
+     */
+    public List<Settlements> getSettlementsByZipCode(String zipcode) {
+        ZipCode zipCode = getZipCode(zipcode);
+        return zipCode.getSettlements();
+    }
+
+    /**
+     * Búsqueda avanzada con múltiples filtros.
+     *
+     * @param request Objeto con los filtros de búsqueda
+     * @return Lista de códigos postales que coinciden con todos los filtros
+     */
+    @Cacheable(value = "advancedSearch", key = "#request.toString()")
+    public List<ZipCode> advancedSearch(AdvancedSearchRequest request) {
+        Timer.Sample sample = metricsConfiguration.startTimer();
+        try {
+            // Validar que al menos un filtro esté presente
+            if ((request.getFederalEntity() == null || request.getFederalEntity().isBlank()) &&
+                (request.getMunicipality() == null || request.getMunicipality().isBlank()) &&
+                (request.getSettlement() == null || request.getSettlement().isBlank()) &&
+                (request.getSettlementType() == null || request.getSettlementType().isBlank()) &&
+                (request.getZoneType() == null || request.getZoneType().isBlank())) {
+                throw new IllegalArgumentException("Debe proporcionar al menos un criterio de búsqueda");
+            }
+
+            // Normalizar términos de búsqueda
+            String normalizedEntity = request.getFederalEntity() != null ?
+                    Util.normalizeString(request.getFederalEntity().trim()) : null;
+            String normalizedMunicipality = request.getMunicipality() != null ?
+                    Util.normalizeString(request.getMunicipality().trim()) : null;
+            String normalizedSettlement = request.getSettlement() != null ?
+                    Util.normalizeString(request.getSettlement().trim()) : null;
+            String normalizedSettlementType = request.getSettlementType() != null ?
+                    Util.normalizeString(request.getSettlementType().trim()) : null;
+            String normalizedZoneType = request.getZoneType() != null ?
+                    Util.normalizeString(request.getZoneType().trim()) : null;
+
+            List<ZipCode> results = zipCodesByCode.values().parallelStream()
+                    .filter(zipCode -> {
+                        // Filtrar por entidad federativa
+                        if (normalizedEntity != null && !normalizedEntity.isEmpty()) {
+                            String zipEntity = Util.normalizeString(zipCode.getFederalEntity());
+                            if (!zipEntity.contains(normalizedEntity)) {
+                                return false;
+                            }
+                        }
+
+                        // Filtrar por municipio
+                        if (normalizedMunicipality != null && !normalizedMunicipality.isEmpty()) {
+                            String zipMunicipality = Util.normalizeString(zipCode.getMunicipality());
+                            if (!zipMunicipality.contains(normalizedMunicipality)) {
+                                return false;
+                            }
+                        }
+
+                        // Filtrar por asentamiento, tipo de asentamiento o tipo de zona
+                        if ((normalizedSettlement != null && !normalizedSettlement.isEmpty()) ||
+                            (normalizedSettlementType != null && !normalizedSettlementType.isEmpty()) ||
+                            (normalizedZoneType != null && !normalizedZoneType.isEmpty())) {
+
+                            boolean hasMatchingSettlement = zipCode.getSettlements().stream()
+                                    .anyMatch(settlement -> {
+                                        boolean matches = true;
+
+                                        if (normalizedSettlement != null && !normalizedSettlement.isEmpty()) {
+                                            String settlementName = Util.normalizeString(settlement.getName());
+                                            matches = settlementName.contains(normalizedSettlement);
+                                        }
+
+                                        if (matches && normalizedSettlementType != null && !normalizedSettlementType.isEmpty()) {
+                                            String type = Util.normalizeString(settlement.getSettlementType());
+                                            matches = type.contains(normalizedSettlementType);
+                                        }
+
+                                        if (matches && normalizedZoneType != null && !normalizedZoneType.isEmpty()) {
+                                            String zone = Util.normalizeString(settlement.getZoneType());
+                                            matches = zone.contains(normalizedZoneType);
+                                        }
+
+                                        return matches;
+                                    });
+
+                            if (!hasMatchingSettlement) {
+                                return false;
+                            }
+                        }
+
+                        return true;
+                    })
+                    .sorted(Comparator.comparing(ZipCode::getZipCode))
+                    .collect(Collectors.toList());
+
+            if (results.isEmpty()) {
+                metricsConfiguration.recordSearchError("advanced", "not_found");
+                throw new ZipCodeNotFoundException("No se encontraron códigos postales con los criterios especificados");
+            }
+
+            metricsConfiguration.recordResultSize("advanced", results.size());
+            return results;
+        } finally {
+            metricsConfiguration.recordSearchDuration(sample, "advanced");
+        }
     }
 }

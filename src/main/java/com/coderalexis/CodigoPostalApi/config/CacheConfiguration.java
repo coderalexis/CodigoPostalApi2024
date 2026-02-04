@@ -18,7 +18,11 @@ public class CacheConfiguration {
         CaffeineCacheManager cacheManager = new CaffeineCacheManager(
                 "zipcodes",
                 "federalEntitySearch",
-                "municipalitySearch"
+                "municipalitySearch",
+                "partialSearch",
+                "federalEntities",
+                "municipalitiesByEntity",
+                "advancedSearch"
         );
 
         cacheManager.registerCustomCache("zipcodes",
@@ -39,6 +43,38 @@ public class CacheConfiguration {
                 Caffeine.newBuilder()
                         .maximumSize(200)
                         .expireAfterWrite(15, TimeUnit.MINUTES)
+                        .recordStats()
+                        .build());
+
+        // Cache para búsqueda parcial (autocompletado)
+        cacheManager.registerCustomCache("partialSearch",
+                Caffeine.newBuilder()
+                        .maximumSize(500)
+                        .expireAfterWrite(10, TimeUnit.MINUTES)
+                        .recordStats()
+                        .build());
+
+        // Cache para lista de entidades federativas (cambia poco, TTL largo)
+        cacheManager.registerCustomCache("federalEntities",
+                Caffeine.newBuilder()
+                        .maximumSize(1)
+                        .expireAfterWrite(1, TimeUnit.HOURS)
+                        .recordStats()
+                        .build());
+
+        // Cache para municipios por entidad
+        cacheManager.registerCustomCache("municipalitiesByEntity",
+                Caffeine.newBuilder()
+                        .maximumSize(50)
+                        .expireAfterWrite(30, TimeUnit.MINUTES)
+                        .recordStats()
+                        .build());
+
+        // Cache para búsqueda avanzada
+        cacheManager.registerCustomCache("advancedSearch",
+                Caffeine.newBuilder()
+                        .maximumSize(100)
+                        .expireAfterWrite(10, TimeUnit.MINUTES)
                         .recordStats()
                         .build());
 
