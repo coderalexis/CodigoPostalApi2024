@@ -1,0 +1,63 @@
+# ========================================
+# PERFIL PARA RAILWAY
+# ========================================
+# Se activa automáticamente con: SPRING_PROFILES_ACTIVE=railway
+# O con variable: SPRING_PROFILE=railway
+
+spring:
+  config:
+    activate:
+      on-profile: railway
+
+# Puerto dinámico (Railway asigna via $PORT)
+server:
+  port: ${PORT:8080}
+  error:
+    include-message: never
+    include-stacktrace: never
+    include-exception: false
+    whitelabel:
+      enabled: false
+  shutdown: graceful
+  compression:
+    enabled: true
+    mime-types: application/json,application/xml,text/html,text/xml,text/plain
+    min-response-size: 512
+
+# Graceful shutdown
+spring.lifecycle.timeout-per-shutdown-phase: 20s
+
+# Rate limiting para producción en Railway
+ratelimit:
+  enabled: true
+  requests-per-minute: 60
+  ip-based: true
+  burst-capacity: 15
+
+# Actuator - solo health y prometheus en el mismo puerto
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus,info
+  endpoint:
+    health:
+      show-details: never
+      show-components: never
+  # NO usar puerto separado en Railway (solo un puerto disponible)
+  server:
+    port: ${PORT:8080}
+
+# Logging a stdout (Railway captura logs de stdout)
+logging:
+  level:
+    com.coderalexis.CodigoPostalApi: INFO
+    org.springframework.web: WARN
+    org.springframework.boot: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%level] %logger{36} - %msg%n"
+
+# Archivo de datos desde classpath (empaquetado en JAR)
+zipcode:
+  file:
+    path: classpath:CPdescarga.txt

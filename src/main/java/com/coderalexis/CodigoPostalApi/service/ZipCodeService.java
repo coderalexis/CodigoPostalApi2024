@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.core.io.ClassPathResource;
 
 import java.io.*;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
@@ -104,13 +105,27 @@ public class ZipCodeService {
     }
 
     private InputStream getInputStream() throws IOException {
-        Path path = Paths.get(filePath);
-
-        if (Files.exists(path)) {
-            log.info("Cargando códigos postales desde {}", filePath);
-            return Files.newInputStream(path);
+        // Si el path empieza con "classpath:", cargar desde recursos internos
+        if (filePath != null && filePath.startsWith("classpath:")) {
+            String resourcePath = filePath.substring("classpath:".length());
+            ClassPathResource resource = new ClassPathResource(resourcePath);
+            if (resource.exists()) {
+                log.info("Cargando códigos postales desde classpath: {}", resourcePath);
+                return resource.getInputStream();
+            }
+            log.warn("Recurso no encontrado en classpath: {}", resourcePath);
         }
 
+        // Intentar cargar desde sistema de archivos
+        if (filePath != null && !filePath.startsWith("classpath:")) {
+            Path path = Paths.get(filePath);
+            if (Files.exists(path)) {
+                log.info("Cargando códigos postales desde {}", filePath);
+                return Files.newInputStream(path);
+            }
+        }
+
+        // Fallback: intentar cargar desde recursos internos con nombre por defecto
         ClassPathResource resource = new ClassPathResource(RESOURCE_FILE);
         if (resource.exists()) {
             log.info("Cargando códigos postales desde recurso interno {}", RESOURCE_FILE);
@@ -124,16 +139,17 @@ public class ZipCodeService {
         long startTime = System.currentTimeMillis();
         errorCount = 0;
 
+        // El archivo del SEPOMEX viene en ISO-8859-1 (Latin-1), no UTF-8
+        // Usamos BufferedInputStream para poder detectar el encoding sin perder datos
+        BufferedInputStream bufferedStream = new BufferedInputStream(stream);
+        Charset charset = detectCharset(bufferedStream);
+        log.info("Encoding detectado: {}", charset.name());
+
         try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                new InputStreamReader(bufferedStream, charset))) {
 
-            // Validar encoding leyendo primeras líneas
-            String firstLine = reader.readLine();
-            if (firstLine != null && !isValidUtf8Content(firstLine)) {
-                log.warn("El archivo podría no estar en UTF-8. Algunos caracteres podrían no mostrarse correctamente.");
-            }
-
-            // Saltar la segunda línea (header)
+            // Saltar las primeras dos líneas (metadata y header)
+            reader.readLine();
             reader.readLine();
 
             long linesProcessed = reader.lines()
@@ -154,9 +170,60 @@ public class ZipCodeService {
         }
     }
 
-    private boolean isValidUtf8Content(String content) {
-        // Verificar si contiene caracteres típicos del español que indican UTF-8 correcto
-        return !content.contains("�") && !content.contains("Ã");
+    /**
+     * Detecta el charset del archivo probando con las codificaciones más comunes.
+     * El archivo del SEPOMEX generalmente viene en ISO-8859-1 (Latin-1).
+     * Usa mark/reset para no consumir el stream.
+     */
+    private Charset detectCharset(BufferedInputStream stream) throws IOException {
+        // Marcar la posición actual para poder volver después de leer
+        stream.mark(4096);
+
+        // Leer los primeros bytes para analizar
+        byte[] sample = new byte[4096];
+        int bytesRead = stream.read(sample);
+
+        // Volver al inicio del stream
+        stream.reset();
+
+        if (bytesRead <= 0) {
+            return StandardCharsets.UTF_8;
+        }
+
+        // Buscar bytes que indican ISO-8859-1 (caracteres acentuados en rango 0x80-0xFF)
+        // En ISO-8859-1: á=0xE1, é=0xE9, í=0xED, ó=0xF3, ú=0xFA, ñ=0xF1
+        boolean hasHighBytes = false;
+        boolean hasUtf8Sequences = false;
+
+        for (int i = 0; i < bytesRead; i++) {
+            int b = sample[i] & 0xFF;
+            if (b >= 0x80) {
+                hasHighBytes = true;
+                // Verificar si parece una secuencia UTF-8 válida (empieza con 110xxxxx o 1110xxxx)
+                if ((b & 0xE0) == 0xC0 || (b & 0xF0) == 0xE0) {
+                    // Verificar el siguiente byte (debe ser 10xxxxxx)
+                    if (i + 1 < bytesRead && (sample[i + 1] & 0xC0) == 0x80) {
+                        hasUtf8Sequences = true;
+                    }
+                }
+            }
+        }
+
+        // Si hay bytes altos pero no parecen secuencias UTF-8 válidas, es ISO-8859-1
+        if (hasHighBytes && !hasUtf8Sequences) {
+            log.debug("Detectado encoding ISO-8859-1 (bytes altos sin secuencias UTF-8)");
+            return StandardCharsets.ISO_8859_1;
+        }
+
+        // Si hay secuencias UTF-8 válidas, usar UTF-8
+        if (hasUtf8Sequences) {
+            log.debug("Detectado encoding UTF-8 (secuencias UTF-8 válidas encontradas)");
+            return StandardCharsets.UTF_8;
+        }
+
+        // Por defecto para archivos del SEPOMEX, usar ISO-8859-1
+        log.debug("Usando encoding por defecto ISO-8859-1 para archivo SEPOMEX");
+        return StandardCharsets.ISO_8859_1;
     }
 
     private boolean processLine(String line) {
