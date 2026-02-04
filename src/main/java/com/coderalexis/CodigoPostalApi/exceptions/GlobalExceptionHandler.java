@@ -6,6 +6,7 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
@@ -63,6 +64,25 @@ public class GlobalExceptionHandler {
         );
         log.warn("MethodArgumentNotValidException: {}", errors);
         return new ResponseEntity<>(error, HttpStatus.BAD_REQUEST);
+    }
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ErrorResponse> handleNoResourceFoundException(NoResourceFoundException ex, WebRequest request) {
+        // Ignorar peticiones de recursos estáticos del navegador (favicon, devtools, etc.)
+        String path = ex.getResourcePath();
+        if (path.contains("favicon") || path.contains(".well-known") || path.contains("devtools")) {
+            log.debug("Recurso estático no encontrado (ignorado): {}", path);
+            return ResponseEntity.notFound().build();
+        }
+
+        ErrorResponse error = new ErrorResponse(
+                HttpStatus.NOT_FOUND.value(),
+                "Recurso no encontrado",
+                request.getDescription(false),
+                LocalDateTime.now()
+        );
+        log.warn("NoResourceFoundException: {}", path);
+        return new ResponseEntity<>(error, HttpStatus.NOT_FOUND);
     }
 
     @ExceptionHandler(Exception.class)
