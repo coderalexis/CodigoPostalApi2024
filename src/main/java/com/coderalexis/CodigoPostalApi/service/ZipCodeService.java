@@ -22,6 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -44,9 +45,11 @@ public class ZipCodeService {
 
     private static final java.util.regex.Pattern ZIP_CODE_PATTERN =
         java.util.regex.Pattern.compile("^\\d{5}$");
+    private static final java.util.regex.Pattern DIGITS_PATTERN =
+        java.util.regex.Pattern.compile("^\\d+$");
 
     // Thread-safe maps for concurrent access
-    private final Map<String, ZipCode> zipCodesByCode = new ConcurrentHashMap<>();
+    private final NavigableMap<String, ZipCode> zipCodesByCode = new ConcurrentSkipListMap<>();
     // Inverted indices for fast searches by entity and municipality
     private final Map<String, Set<ZipCode>> zipCodesByNormalizedEntity = new ConcurrentHashMap<>();
     private final Map<String, Set<ZipCode>> zipCodesByNormalizedMunicipality = new ConcurrentHashMap<>();
@@ -408,7 +411,7 @@ public class ZipCodeService {
             String cleanCode = partialCode.trim();
 
             // Validar que solo contenga dígitos
-            if (!cleanCode.matches("\\d+")) {
+            if (!DIGITS_PATTERN.matcher(cleanCode).matches()) {
                 metricsConfiguration.recordSearchError("partial", "invalid_format");
                 throw new IllegalArgumentException("El código postal solo debe contener dígitos");
             }
@@ -416,10 +419,10 @@ public class ZipCodeService {
             // Limitar el tamaño del resultado
             int effectiveLimit = Math.min(Math.max(limit, 1), 50);
 
-            List<ZipCode> results = zipCodesByCode.entrySet().parallelStream()
-                    .filter(entry -> entry.getKey().startsWith(cleanCode))
-                    .map(Map.Entry::getValue)
-                    .sorted(Comparator.comparing(ZipCode::getZipCode))
+            String upperBound = cleanCode + Character.MAX_VALUE;
+            List<ZipCode> results = zipCodesByCode.subMap(cleanCode, true, upperBound, false)
+                    .values()
+                    .stream()
                     .limit(effectiveLimit)
                     .collect(Collectors.toList());
 

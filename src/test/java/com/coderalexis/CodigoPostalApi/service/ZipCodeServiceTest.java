@@ -152,6 +152,26 @@ class ZipCodeServiceTest {
     }
 
     @Test
+    @DisplayName("Debe buscar códigos postales por prefijo respetando orden y límite")
+    void shouldSearchByPartialZipCodePrefixWithLimit() {
+        List<ZipCode> results = zipCodeService.searchByPartialCode("010", 3);
+
+        assertNotNull(results, "Los resultados no deben ser null");
+        assertFalse(results.isEmpty(), "Debe encontrar códigos postales con prefijo 010");
+        assertTrue(results.size() <= 3, "Debe respetar el límite solicitado");
+        assertTrue(results.stream().allMatch(zipCode -> zipCode.getZipCode().startsWith("010")),
+            "Todos los códigos postales deben iniciar con el prefijo buscado");
+
+        List<String> zipCodes = results.stream()
+                .map(ZipCode::getZipCode)
+                .toList();
+        List<String> sortedZipCodes = zipCodes.stream()
+                .sorted()
+                .toList();
+        assertEquals(sortedZipCodes, zipCodes, "Los códigos postales deben regresar ordenados");
+    }
+
+    @Test
     @DisplayName("Debe obtener estadísticas correctas")
     void shouldGetStatistics() {
         ZipCodeStats stats = zipCodeService.getStatistics();
