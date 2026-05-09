@@ -159,23 +159,7 @@ public class Controller {
             int size
     ) {
         List<ZipCode> allResults = zipCodeService.searchByFederalEntity(federalEntity);
-
-        int totalElements = allResults.size();
-        int totalPages = (int) Math.ceil((double) totalElements / size);
-        int start = page * size;
-        int end = Math.min(start + size, totalElements);
-
-        List<ZipCode> pagedResults = allResults.subList(start, end);
-
-        PagedResponse<ZipCode> response = PagedResponse.<ZipCode>builder()
-                .content(pagedResults)
-                .pageNumber(page)
-                .pageSize(size)
-                .totalElements(totalElements)
-                .totalPages(totalPages)
-                .first(page == 0)
-                .last(page == totalPages - 1)
-                .build();
+        PagedResponse<ZipCode> response = ZipCodeService.createPagedResponse(allResults, page, size);
 
         return ResponseEntity.ok(response);
     }
@@ -241,23 +225,7 @@ public class Controller {
             int size
     ) {
         List<ZipCode> allResults = zipCodeService.searchByMunicipality(municipality);
-
-        int totalElements = allResults.size();
-        int totalPages = (int) Math.ceil((double) totalElements / size);
-        int start = page * size;
-        int end = Math.min(start + size, totalElements);
-
-        List<ZipCode> pagedResults = allResults.subList(start, end);
-
-        PagedResponse<ZipCode> response = PagedResponse.<ZipCode>builder()
-                .content(pagedResults)
-                .pageNumber(page)
-                .pageSize(size)
-                .totalElements(totalElements)
-                .totalPages(totalPages)
-                .first(page == 0)
-                .last(page == totalPages - 1)
-                .build();
+        PagedResponse<ZipCode> response = ZipCodeService.createPagedResponse(allResults, page, size);
 
         return ResponseEntity.ok(response);
     }
@@ -593,41 +561,25 @@ public class Controller {
                 .build();
 
         List<ZipCode> allResults = zipCodeService.advancedSearch(request);
-
-        int totalElements = allResults.size();
-        int totalPages = (int) Math.ceil((double) totalElements / size);
-        int start = Math.min(page * size, totalElements);
-        int end = Math.min(start + size, totalElements);
-
-        List<ZipCode> pagedResults = allResults.subList(start, end);
+        PagedResponse<ZipCode> response = ZipCodeService.createPagedResponse(allResults, page, size);
 
         if (simplified) {
-            List<ZipCodeSimplified> simplifiedResults = pagedResults.stream()
+            List<ZipCodeSimplified> simplifiedResults = response.getContent().stream()
                     .map(ZipCodeSimplified::fromZipCode)
                     .toList();
 
-            PagedResponse<ZipCodeSimplified> response = PagedResponse.<ZipCodeSimplified>builder()
+            PagedResponse<ZipCodeSimplified> simplifiedResponse = PagedResponse.<ZipCodeSimplified>builder()
                     .content(simplifiedResults)
-                    .pageNumber(page)
-                    .pageSize(size)
-                    .totalElements(totalElements)
-                    .totalPages(totalPages)
-                    .first(page == 0)
-                    .last(page >= totalPages - 1)
+                    .pageNumber(response.getPageNumber())
+                    .pageSize(response.getPageSize())
+                    .totalElements(response.getTotalElements())
+                    .totalPages(response.getTotalPages())
+                    .first(response.isFirst())
+                    .last(response.isLast())
                     .build();
 
-            return ResponseEntity.ok(response);
+            return ResponseEntity.ok(simplifiedResponse);
         }
-
-        PagedResponse<ZipCode> response = PagedResponse.<ZipCode>builder()
-                .content(pagedResults)
-                .pageNumber(page)
-                .pageSize(size)
-                .totalElements(totalElements)
-                .totalPages(totalPages)
-                .first(page == 0)
-                .last(page >= totalPages - 1)
-                .build();
 
         return ResponseEntity.ok(response);
     }

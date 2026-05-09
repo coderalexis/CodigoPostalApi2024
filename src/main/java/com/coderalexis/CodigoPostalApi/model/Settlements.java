@@ -1,5 +1,6 @@
 package com.coderalexis.CodigoPostalApi.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -18,4 +19,13 @@ public class Settlements implements Serializable {
 
     @JsonProperty("settlement_type")
     private String settlementType;
+
+    @JsonIgnore
+    private String normalizedName;
+
+    @JsonIgnore
+    private String normalizedSettlementType;
+
+    @JsonIgnore
+    private String normalizedZoneType;
 }

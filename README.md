@@ -20,19 +20,21 @@ High-performance REST API for querying Mexican postal codes (ZIP codes) with adv
 
 ## Features
 
-- **High Performance**: Handles 6,389+ requests/second with 99% of requests under 190ms
+- **High Performance**: Optimized data structures for sub-millisecond lookups
 - **Smart Caching**: Multi-level Caffeine cache with specific TTL per data type
 - **Pagination**: Consistent pagination across all search endpoints
-- **Partial Code Search**: Autocomplete support with partial zip code matching
-- **Advanced Search**: Multi-filter search by state, municipality, settlement, and zone type
+- **Partial Code Search**: Autocomplete support with O(log n) prefix matching via sorted map
+- **Advanced Search**: Multi-filter search by state, municipality, settlement, and zone type using inverted indices
 - **Simplified Response**: Optional lightweight response format without settlement details
+- **Pre-computed Data**: Statistics and federal entities computed at startup for instant retrieval
 - **Robust Validation**: Data validation with comprehensive error handling
 - **Health Checks**: Custom health indicators for data loading status
 - **Multi-Environment**: Dev, QA, Production, and Railway profiles
-- **Rate Limiting**: Token bucket algorithm to prevent API abuse
-- **Metrics**: Custom business metrics with Prometheus integration
+- **Rate Limiting**: Token bucket algorithm with Caffeine-backed auto-eviction
+- **Metrics**: Low-cardinality business metrics with Prometheus integration
 - **Accent-Insensitive Search**: Searches work regardless of accents or case
 - **Auto Encoding Detection**: Automatic detection of ISO-8859-1/UTF-8 file encoding
+- **HTTP/2**: Enabled for connection multiplexing and reduced latency
 - **Complete Documentation**: Interactive Swagger UI with examples
 - **Cloud-Native**: Optimized for Railway, Docker, and container deployments
 
@@ -40,9 +42,9 @@ High-performance REST API for querying Mexican postal codes (ZIP codes) with adv
 
 | Technology | Version | Description |
 |------------|---------|-------------|
-| **Java** | 25 LTS | Latest LTS with Compact Object Headers |
+| **Java** | 25 | Latest with Compact Object Headers and Virtual Threads |
 | **Spring Boot** | 4.0.2 | Latest framework with modular architecture |
-| **Spring Web** | 7.0 | REST API support |
+| **Spring Web** | - | REST API support with HTTP/2 |
 | **Spring Cache** | - | Caching abstraction |
 | **Caffeine** | - | High-performance in-memory cache |
 | **Bucket4j** | 8.10.1 | Rate limiting implementation |
@@ -51,7 +53,7 @@ High-performance REST API for querying Mexican postal codes (ZIP codes) with adv
 | **Micrometer** | - | Application metrics |
 | **Prometheus** | - | Metrics collection |
 | **SpringDoc OpenAPI** | 3.0.1 | Swagger UI & API documentation |
-| **JUnit 6** | - | Testing framework |
+| **JUnit 5** | - | Testing framework (Jupiter) |
 | **Maven** | 3.8+ | Build tool |
 
 ## Quick Start
@@ -114,12 +116,12 @@ curl http://localhost:8080/zip-codes/01000
 ```json
 {
   "zip_code": "01000",
-  "locality": "Ciudad de México",
-  "federal_entity": "Ciudad de México",
-  "municipality": "Álvaro Obregón",
+  "locality": "Ciudad de Mexico",
+  "federal_entity": "Ciudad de Mexico",
+  "municipality": "Alvaro Obregon",
   "settlements": [
     {
-      "name": "San Ángel",
+      "name": "San Angel",
       "zone_type": "Urbano",
       "settlement_type": "Colonia"
     }
@@ -131,7 +133,7 @@ curl http://localhost:8080/zip-codes/01000
 
 **Endpoint:** `GET /zip-codes/search?code={prefix}&limit={n}&simplified={bool}`
 
-**Description:** Search zip codes by prefix for autocomplete functionality.
+**Description:** Search zip codes by prefix using O(log n) sorted map range query.
 
 **Parameters:**
 - `code` (required): Partial zip code (1-5 digits)
@@ -147,7 +149,7 @@ curl "http://localhost:8080/zip-codes/search?code=010&limit=5"
 
 **Endpoint:** `GET /zip-codes/federal-entities`
 
-**Description:** Get all 32 Mexican states with statistics.
+**Description:** Get all 32 Mexican states with statistics. Pre-computed at startup for instant response.
 
 **Example Response:**
 ```json
@@ -158,7 +160,7 @@ curl "http://localhost:8080/zip-codes/search?code=010&limit=5"
     "municipalities_count": 11
   },
   {
-    "name": "Ciudad de México",
+    "name": "Ciudad de Mexico",
     "zip_codes_count": 1110,
     "municipalities_count": 16
   }
@@ -191,7 +193,7 @@ curl "http://localhost:8080/zip-codes/01000/settlements"
 
 **Endpoint:** `GET /zip-codes?federal_entity={name}&page={page}&size={size}`
 
-**Description:** Search postal codes by state name with pagination.
+**Description:** Search postal codes by state name with pagination. Uses inverted index for fast lookups.
 
 **Parameters:**
 - `federal_entity` (required): State name (partial match, accent-insensitive)
@@ -200,20 +202,20 @@ curl "http://localhost:8080/zip-codes/01000/settlements"
 
 **Example Request:**
 ```bash
-curl "http://localhost:8080/zip-codes?federal_entity=Ciudad%20de%20México&page=0&size=10"
+curl "http://localhost:8080/zip-codes?federal_entity=Ciudad%20de%20Mexico&page=0&size=10"
 ```
 
 ### 7. Search by Municipality
 
 **Endpoint:** `GET /zip-codes/by-municipality?municipality={name}&page={page}&size={size}`
 
-**Description:** Search postal codes by municipality name with pagination.
+**Description:** Search postal codes by municipality name with pagination. Uses inverted index.
 
 ### 8. Advanced Search
 
 **Endpoint:** `GET /zip-codes/advanced`
 
-**Description:** Search with multiple filters combined.
+**Description:** Search with multiple filters combined. Uses inverted indices as starting point to minimize scan scope.
 
 **Parameters:**
 - `federal_entity` (optional): State filter
@@ -234,7 +236,7 @@ curl "http://localhost:8080/zip-codes/advanced?federal_entity=jalisco&municipali
 
 **Endpoint:** `GET /zip-codes/stats`
 
-**Description:** Get general statistics about the loaded data.
+**Description:** Get general statistics (pre-computed at startup, O(1) retrieval).
 
 **Example Response:**
 ```json
@@ -307,6 +309,8 @@ SPRING_PROFILES_ACTIVE=railway
 | prod    | ON  | 100          | 20             |
 | railway | ON  | 60           | 15             |
 
+Rate limit buckets use Caffeine cache with automatic eviction after 5 minutes of inactivity, preventing memory leaks.
+
 ### Response Headers
 
 ```
@@ -329,6 +333,8 @@ X-RateLimit-Retry-After-Seconds: 60
 | `municipalitiesByEntity` | 50 | 30 min | Municipalities by state |
 | `advancedSearch` | 100 | 10 min | Multi-filter searches |
 
+Cache warmup runs in parallel at startup for common queries.
+
 ## Monitoring and Metrics
 
 ### Actuator Endpoints
@@ -343,11 +349,16 @@ curl http://localhost:8080/actuator/prometheus
 
 ### Custom Business Metrics
 
+Low-cardinality metrics to avoid Prometheus series explosion:
+
 ```promql
-zipcode_search_direct_total           # Direct zip code searches
-zipcode_search_federal_entity_total   # State searches
-zipcode_search_duration_seconds       # Search latency histogram
-zipcode_search_errors_total           # Error counters
+zipcode_search_total{type="direct"}         # Direct zip code searches
+zipcode_search_total{type="federal_entity"} # State searches
+zipcode_search_total{type="municipality"}   # Municipality searches
+zipcode_search_total{type="partial"}        # Partial/autocomplete searches
+zipcode_search_duration_seconds             # Search latency histogram
+zipcode_search_errors_total                 # Error counters
+zipcode_search_result_size                  # Result size distribution
 ```
 
 ## Testing
@@ -369,18 +380,33 @@ mvn test jacoco:report
 
 ## Performance
 
-### Benchmark Results (Apache Bench)
+### Data Structure Complexity
 
-| Metric | Value |
-|--------|-------|
-| Requests per second | 6,389 req/s |
-| Time per request (mean) | 156 ms |
-| Failed requests | 0 |
-| 99th percentile | 190 ms |
+| Operation | Complexity | Data Structure |
+|-----------|-----------|----------------|
+| Direct zip code lookup | O(1) | ConcurrentHashMap |
+| Prefix/autocomplete search | O(log n + k) | ConcurrentSkipListMap.subMap() |
+| Federal entity search | O(m) | Inverted index (32 entries) |
+| Municipality search | O(m) | Inverted index (~2500 entries) |
+| Advanced search | O(candidates) | Inverted index as starting point |
+| Statistics | O(1) | Pre-computed at startup |
+| Federal entities list | O(1) | Pre-computed at startup |
+
+### Optimizations Applied
+
+- **Pre-computed normalized fields**: NFD normalization done at load time, not at query time
+- **ConcurrentSkipListMap**: Prefix search uses `subMap()` range query instead of O(n) full scan
+- **Inverted indices for advanced search**: Reduces candidate set from ~32K to ~2K before filtering
+- **Sequential streams for small collections**: Avoids ForkJoinPool overhead on indices with <100 entries
+- **Pre-compiled regex Pattern**: `PIPE_PATTERN` compiled once for file parsing
+- **Pre-computed statistics**: Stats and federal entities calculated once at startup
+- **Caffeine-backed rate limit buckets**: Auto-eviction prevents unbounded memory growth
+- **Low-cardinality metrics**: Search type tags instead of per-zipcode counters
+- **Parallel cache warmup**: CompletableFuture for concurrent cache preloading
+- **HTTP/2**: Enabled for connection multiplexing
+- **Response compression**: Gzip for responses > 1KB
 
 ### Java 25 Optimizations
-
-The application leverages Java 25 LTS features:
 
 - **Compact Object Headers**: Reduces object header from 12 to 8 bytes (~20% heap reduction)
 - **ZGC Generational**: Low-latency garbage collector
@@ -443,24 +469,25 @@ docker run -p 8080:8080 \
 
 ```
 CodigoPostalApi2024/
-├── src/main/java/com/coderalexis/CodigoPostalApi/
-│   ├── config/           # Configuration classes
-│   ├── controller/       # REST controllers
-│   ├── exceptions/       # Exception handlers
-│   ├── health/           # Health indicators
-│   ├── model/            # Data models
-│   ├── service/          # Business logic
-│   └── util/             # Utilities
-├── src/main/resources/
-│   ├── application.yml
-│   ├── application-dev.yml
-│   ├── application-prod.yml
-│   ├── application-qa.yml
-│   ├── application-railway.yml
-│   └── CPdescarga.txt
-├── Dockerfile
-├── railway.toml
-└── pom.xml
+  src/main/java/com/coderalexis/CodigoPostalApi/
+    config/           # Configuration classes
+    controller/       # REST controllers
+    exceptions/       # Exception handlers
+    health/           # Health indicators
+    model/            # Data models
+    service/          # Business logic
+    util/             # Utilities
+  src/main/resources/
+    application.yml
+    application-dev.yml
+    application-prod.yml
+    application-qa.yml
+    application-railway.yml
+    CPdescarga.txt
+  Dockerfile
+  railway.toml
+  CLAUDE.md
+  pom.xml
 ```
 
 ### Build Commands
@@ -491,8 +518,29 @@ Postal codes data sourced from:
 
 ## Version History
 
+### v3.1.0 (2026-02-07)
+- **Performance optimizations**:
+  - ConcurrentSkipListMap for O(log n) prefix search (was O(n) full scan)
+  - Inverted indices used as starting point in advanced search (reduces candidates from ~32K to ~2K)
+  - Pre-computed normalized fields on ZipCode model (eliminates runtime NFD normalization)
+  - Pre-computed statistics and federal entities list at startup
+  - Sequential streams for small collections (removed unnecessary parallelStream overhead)
+  - Pre-compiled regex Pattern for file parsing
+  - Parallel cache warmup with CompletableFuture
+- **Bug fixes**:
+  - Fixed ZipCode hashCode/equals to use only zipCode field (was including mutable settlements list)
+- **Infrastructure improvements**:
+  - Low-cardinality Prometheus metrics (prevents series explosion)
+  - Caffeine-backed rate limit buckets with auto-eviction (prevents memory leaks)
+  - HTTP/2 enabled for connection multiplexing
+  - Jackson non-null serialization by default
+- **Documentation**:
+  - Added CLAUDE.md project guidelines
+  - Fixed JUnit version reference (JUnit 5, not 6)
+  - Updated performance documentation with complexity analysis
+
 ### v3.0.0 (2026-02-04)
-- **Upgraded to Java 25 LTS** with Compact Object Headers
+- **Upgraded to Java 25** with Compact Object Headers
 - **Upgraded to Spring Boot 4.0.2** with modular architecture
 - Added partial zip code search (autocomplete)
 - Added list all federal entities endpoint

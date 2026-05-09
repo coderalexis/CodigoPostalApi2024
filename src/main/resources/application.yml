@@ -3,6 +3,11 @@ spring:
     name: CodigoPostalApi
   profiles:
     active: ${SPRING_PROFILE:dev}  # Perfil por defecto: dev
+  threads:
+    virtual:
+      enabled: true
+  jackson:
+    default-property-inclusion: non_null
 
 zipcode:
   file:
@@ -10,6 +15,8 @@ zipcode:
 
 server:
   port: 8080
+  http2:
+    enabled: true
   compression:
     enabled: true
     mime-types: application/json,application/xml,text/html,text/xml,text/plain
@@ -20,9 +27,6 @@ server:
       min-spare: 20
     max-connections: 10000
     accept-count: 100
-
-# Virtual Threads (Java 21+)
-spring.threads.virtual.enabled: true
 
 springdoc:
   swagger-ui:

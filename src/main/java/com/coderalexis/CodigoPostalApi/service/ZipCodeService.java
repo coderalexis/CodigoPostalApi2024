@@ -4,6 +4,7 @@ import com.coderalexis.CodigoPostalApi.config.MetricsConfiguration;
 import com.coderalexis.CodigoPostalApi.exceptions.ZipCodeNotFoundException;
 import com.coderalexis.CodigoPostalApi.model.AdvancedSearchRequest;
 import com.coderalexis.CodigoPostalApi.model.FederalEntity;
+import com.coderalexis.CodigoPostalApi.model.PagedResponse;
 import com.coderalexis.CodigoPostalApi.model.Settlements;
 import com.coderalexis.CodigoPostalApi.model.ZipCode;
 import com.coderalexis.CodigoPostalApi.model.ZipCodeStats;
@@ -22,16 +23,19 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.Collection;
+import java.util.List;
 
 @Service
 @Slf4j
 public class ZipCodeService {
-    private static final String LINE_SEPARATOR = Pattern.quote("|");
+    // Pre-compiled Pattern for splitting lines (avoids recompiling on every split call)
+    private static final Pattern PIPE_PATTERN = Pattern.compile("\\|");
 
-    // Column indices based on CPdescarga.txt structure:
-    // d_codigo|d_asenta|d_tipo_asenta|D_mnpio|d_estado|d_ciudad|d_CP|c_estado|c_oficina|c_CP|c_tipo_asenta|c_mnpio|id_asenta_cpcons|d_zona|c_cve_ciudad
+    // Column indices based on CPdescarga.txt structure
     private static final int COL_ZIP_CODE = 0;
     private static final int COL_SETTLEMENT_NAME = 1;
     private static final int COL_SETTLEMENT_TYPE = 2;
@@ -42,14 +46,23 @@ public class ZipCodeService {
     private static final int MIN_COLUMNS = 6;
     private static final int MAX_ERRORS_THRESHOLD = 100;
 
-    private static final java.util.regex.Pattern ZIP_CODE_PATTERN =
-        java.util.regex.Pattern.compile("^\\d{5}$");
+    private static final Pattern ZIP_CODE_PATTERN =
+        Pattern.compile("^\\d{5}$");
+    // Pre-compiled pattern for validating digit-only input (avoids recompiling on every partial search)
+    private static final Pattern DIGITS_PATTERN = Pattern.compile("^\\d+$");
 
     // Thread-safe maps for concurrent access
     private final Map<String, ZipCode> zipCodesByCode = new ConcurrentHashMap<>();
+    // Sorted map for O(log n) prefix searches instead of O(n) full scan
+    private final ConcurrentSkipListMap<String, ZipCode> zipCodesSorted = new ConcurrentSkipListMap<>();
     // Inverted indices for fast searches by entity and municipality
     private final Map<String, Set<ZipCode>> zipCodesByNormalizedEntity = new ConcurrentHashMap<>();
     private final Map<String, Set<ZipCode>> zipCodesByNormalizedMunicipality = new ConcurrentHashMap<>();
+
+    // Pre-computed statistics (immutable after load)
+    private volatile ZipCodeStats cachedStats;
+    // Pre-computed federal entities list (immutable after load)
+    private volatile List<FederalEntity> cachedFederalEntities;
 
     private volatile boolean dataLoaded = false;
     private int errorCount = 0;
@@ -77,11 +90,11 @@ public class ZipCodeService {
     public ZipCode getZipCode(String zipcode) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
-            metricsConfiguration.recordZipCodeSearch(zipcode);
+            metricsConfiguration.recordSearch("direct");
             ZipCode zipCode = zipCodesByCode.get(zipcode);
             if (zipCode == null) {
                 metricsConfiguration.recordSearchError("direct", "not_found");
-                throw new ZipCodeNotFoundException("Código postal no encontrado: " + zipcode);
+                throw new ZipCodeNotFoundException("Codigo postal no encontrado: " + zipcode);
             }
             return zipCode;
         } finally {
@@ -93,42 +106,79 @@ public class ZipCodeService {
     public void loadZipCodes() {
         try (InputStream stream = getInputStream()) {
             if (stream == null) {
-                log.error("No se pudo cargar ningún archivo de códigos postales");
+                log.error("No se pudo cargar ningun archivo de codigos postales");
                 return;
             }
 
             processZipCodeFile(stream);
+            buildPreComputedData();
 
         } catch (IOException e) {
-            log.error("Error al cargar los códigos postales", e);
+            log.error("Error al cargar los codigos postales", e);
         }
     }
 
+    private void buildPreComputedData() {
+        // Pre-compute statistics once (data is immutable after load)
+        long totalSettlements = zipCodesByCode.values().stream()
+                .mapToLong(zc -> zc.getSettlements().size())
+                .sum();
+
+        cachedStats = ZipCodeStats.builder()
+                .totalZipCodes(zipCodesByCode.size())
+                .totalFederalEntities(zipCodesByNormalizedEntity.size())
+                .totalMunicipalities(zipCodesByNormalizedMunicipality.size())
+                .totalSettlements(totalSettlements)
+                .build();
+
+        // Pre-compute federal entities list
+        Map<String, List<ZipCode>> zipCodesByEntity = zipCodesByCode.values().stream()
+                .collect(Collectors.groupingBy(ZipCode::getFederalEntity));
+
+        cachedFederalEntities = zipCodesByEntity.entrySet().stream()
+                .map(entry -> {
+                    String entityName = entry.getKey();
+                    List<ZipCode> zipCodes = entry.getValue();
+
+                    long municipalitiesCount = zipCodes.stream()
+                            .map(ZipCode::getMunicipality)
+                            .distinct()
+                            .count();
+
+                    return FederalEntity.builder()
+                            .name(entityName)
+                            .zipCodesCount(zipCodes.size())
+                            .municipalitiesCount((int) municipalitiesCount)
+                            .build();
+                })
+                .sorted(Comparator.comparing(FederalEntity::getName))
+                .toList();
+
+        log.info("  - Estadisticas y entidades federativas pre-computadas");
+    }
+
     private InputStream getInputStream() throws IOException {
-        // Si el path empieza con "classpath:", cargar desde recursos internos
         if (filePath != null && filePath.startsWith("classpath:")) {
             String resourcePath = filePath.substring("classpath:".length());
             ClassPathResource resource = new ClassPathResource(resourcePath);
             if (resource.exists()) {
-                log.info("Cargando códigos postales desde classpath: {}", resourcePath);
+                log.info("Cargando codigos postales desde classpath: {}", resourcePath);
                 return resource.getInputStream();
             }
             log.warn("Recurso no encontrado en classpath: {}", resourcePath);
         }
 
-        // Intentar cargar desde sistema de archivos
         if (filePath != null && !filePath.startsWith("classpath:")) {
             Path path = Paths.get(filePath);
             if (Files.exists(path)) {
-                log.info("Cargando códigos postales desde {}", filePath);
+                log.info("Cargando codigos postales desde {}", filePath);
                 return Files.newInputStream(path);
             }
         }
 
-        // Fallback: intentar cargar desde recursos internos con nombre por defecto
         ClassPathResource resource = new ClassPathResource(RESOURCE_FILE);
         if (resource.exists()) {
-            log.info("Cargando códigos postales desde recurso interno {}", RESOURCE_FILE);
+            log.info("Cargando codigos postales desde recurso interno {}", RESOURCE_FILE);
             return resource.getInputStream();
         }
 
@@ -139,8 +189,6 @@ public class ZipCodeService {
         long startTime = System.currentTimeMillis();
         errorCount = 0;
 
-        // El archivo del SEPOMEX viene en ISO-8859-1 (Latin-1), no UTF-8
-        // Usamos BufferedInputStream para poder detectar el encoding sin perder datos
         BufferedInputStream bufferedStream = new BufferedInputStream(stream);
         Charset charset = detectCharset(bufferedStream);
         log.info("Encoding detectado: {}", charset.name());
@@ -148,7 +196,7 @@ public class ZipCodeService {
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(bufferedStream, charset))) {
 
-            // Saltar las primeras dos líneas (metadata y header)
+            // Skip first two lines (metadata and header)
             reader.readLine();
             reader.readLine();
 
@@ -159,39 +207,27 @@ public class ZipCodeService {
             long duration = System.currentTimeMillis() - startTime;
             dataLoaded = true;
 
-            log.info("✓ Datos cargados exitosamente en {}ms", duration);
-            log.info("  - Códigos postales únicos: {}", zipCodesByCode.size());
+            log.info("Datos cargados exitosamente en {}ms", duration);
+            log.info("  - Codigos postales unicos: {}", zipCodesByCode.size());
             log.info("  - Entidades federativas: {}", zipCodesByNormalizedEntity.size());
             log.info("  - Municipios: {}", zipCodesByNormalizedMunicipality.size());
-            log.info("  - Líneas procesadas: {}", linesProcessed);
+            log.info("  - Lineas procesadas: {}", linesProcessed);
             if (errorCount > 0) {
-                log.warn("  - Líneas con errores: {}", errorCount);
+                log.warn("  - Lineas con errores: {}", errorCount);
             }
         }
     }
 
-    /**
-     * Detecta el charset del archivo probando con las codificaciones más comunes.
-     * El archivo del SEPOMEX generalmente viene en ISO-8859-1 (Latin-1).
-     * Usa mark/reset para no consumir el stream.
-     */
     private Charset detectCharset(BufferedInputStream stream) throws IOException {
-        // Marcar la posición actual para poder volver después de leer
         stream.mark(4096);
-
-        // Leer los primeros bytes para analizar
         byte[] sample = new byte[4096];
         int bytesRead = stream.read(sample);
-
-        // Volver al inicio del stream
         stream.reset();
 
         if (bytesRead <= 0) {
             return StandardCharsets.UTF_8;
         }
 
-        // Buscar bytes que indican ISO-8859-1 (caracteres acentuados en rango 0x80-0xFF)
-        // En ISO-8859-1: á=0xE1, é=0xE9, í=0xED, ó=0xF3, ú=0xFA, ñ=0xF1
         boolean hasHighBytes = false;
         boolean hasUtf8Sequences = false;
 
@@ -199,9 +235,7 @@ public class ZipCodeService {
             int b = sample[i] & 0xFF;
             if (b >= 0x80) {
                 hasHighBytes = true;
-                // Verificar si parece una secuencia UTF-8 válida (empieza con 110xxxxx o 1110xxxx)
                 if ((b & 0xE0) == 0xC0 || (b & 0xF0) == 0xE0) {
-                    // Verificar el siguiente byte (debe ser 10xxxxxx)
                     if (i + 1 < bytesRead && (sample[i + 1] & 0xC0) == 0x80) {
                         hasUtf8Sequences = true;
                     }
@@ -209,29 +243,26 @@ public class ZipCodeService {
             }
         }
 
-        // Si hay bytes altos pero no parecen secuencias UTF-8 válidas, es ISO-8859-1
         if (hasHighBytes && !hasUtf8Sequences) {
             log.debug("Detectado encoding ISO-8859-1 (bytes altos sin secuencias UTF-8)");
             return StandardCharsets.ISO_8859_1;
         }
 
-        // Si hay secuencias UTF-8 válidas, usar UTF-8
         if (hasUtf8Sequences) {
-            log.debug("Detectado encoding UTF-8 (secuencias UTF-8 válidas encontradas)");
+            log.debug("Detectado encoding UTF-8 (secuencias UTF-8 validas encontradas)");
             return StandardCharsets.UTF_8;
         }
 
-        // Por defecto para archivos del SEPOMEX, usar ISO-8859-1
         log.debug("Usando encoding por defecto ISO-8859-1 para archivo SEPOMEX");
         return StandardCharsets.ISO_8859_1;
     }
 
     private boolean processLine(String line) {
         try {
-            String[] words = line.split(LINE_SEPARATOR);
+            String[] words = PIPE_PATTERN.split(line);
 
             if (words.length < MIN_COLUMNS) {
-                handleError("Línea con formato incorrecto (columnas insuficientes): {}",
+                handleError("Linea con formato incorrecto (columnas insuficientes): {}",
                     line.substring(0, Math.min(100, line.length())));
                 return false;
             }
@@ -239,14 +270,14 @@ public class ZipCodeService {
             String zipCodeKey = words[COL_ZIP_CODE].trim();
 
             if (!isValidZipCode(zipCodeKey)) {
-                handleError("Código postal inválido '{}' en línea: {}",
+                handleError("Codigo postal invalido '{}' en linea: {}",
                     zipCodeKey, line.substring(0, Math.min(100, line.length())));
                 return false;
             }
 
             if (words[COL_FEDERAL_ENTITY].trim().isEmpty() ||
                 words[COL_MUNICIPALITY].trim().isEmpty()) {
-                handleError("Campos requeridos vacíos en código postal: {}", zipCodeKey);
+                handleError("Campos requeridos vacios en codigo postal: {}", zipCodeKey);
                 return false;
             }
 
@@ -261,19 +292,32 @@ public class ZipCodeService {
                 z.setLocality(words[COL_LOCALITY].trim());
                 z.setFederalEntity(federalEntity);
                 z.setMunicipality(municipality);
+                z.setNormalizedFederalEntity(normalizedEntity);
+                z.setNormalizedMunicipality(normalizedMunicipality);
                 z.setSettlements(new ArrayList<>());
+
+                // Add to sorted map for prefix searches
+                zipCodesSorted.put(k, z);
                 return z;
             });
 
             Settlements settlement = new Settlements();
-            settlement.setName(words[COL_SETTLEMENT_NAME].trim());
-            settlement.setZoneType(words.length > COL_ZONE_TYPE_INDEX ?
-                words[COL_ZONE_TYPE_INDEX].trim() : "");
-            settlement.setSettlementType(words[COL_SETTLEMENT_TYPE].trim());
+            String settlementName = words[COL_SETTLEMENT_NAME].trim();
+            String settlementTypeVal = words[COL_SETTLEMENT_TYPE].trim();
+            String zoneTypeVal = words.length > COL_ZONE_TYPE_INDEX ?
+                words[COL_ZONE_TYPE_INDEX].trim() : "";
+            
+            settlement.setName(settlementName);
+            settlement.setZoneType(zoneTypeVal);
+            settlement.setSettlementType(settlementTypeVal);
+            
+            // Pre-compute normalized fields to avoid runtime normalization in searches
+            settlement.setNormalizedName(Util.normalizeString(settlementName));
+            settlement.setNormalizedSettlementType(Util.normalizeString(settlementTypeVal));
+            settlement.setNormalizedZoneType(Util.normalizeString(zoneTypeVal));
 
             zipCode.getSettlements().add(settlement);
 
-            // Actualizar índices con referencias directas (evita lookups en búsquedas)
             zipCodesByNormalizedEntity
                     .computeIfAbsent(normalizedEntity, k -> ConcurrentHashMap.newKeySet())
                     .add(zipCode);
@@ -285,7 +329,7 @@ public class ZipCodeService {
             return true;
 
         } catch (Exception e) {
-            handleError("Error procesando la línea: {}",
+            handleError("Error procesando la linea: {}",
                 line.substring(0, Math.min(100, line.length())));
             log.debug("Detalle del error:", e);
             return false;
@@ -297,7 +341,7 @@ public class ZipCodeService {
         if (errorCount <= MAX_ERRORS_THRESHOLD) {
             log.warn(message, args);
         } else if (errorCount == MAX_ERRORS_THRESHOLD + 1) {
-            log.warn("Se alcanzó el límite de {} errores. Los siguientes errores no se mostrarán.", MAX_ERRORS_THRESHOLD);
+            log.warn("Se alcanzo el limite de {} errores. Los siguientes errores no se mostraran.", MAX_ERRORS_THRESHOLD);
         }
     }
 
@@ -309,18 +353,17 @@ public class ZipCodeService {
     public List<ZipCode> searchByFederalEntity(String searchTerm) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
-            metricsConfiguration.recordFederalEntitySearch(searchTerm);
+            metricsConfiguration.recordSearch("federal_entity");
 
             if (searchTerm == null || searchTerm.trim().isEmpty()) {
                 metricsConfiguration.recordSearchError("federal_entity", "empty_search");
-                throw new IllegalArgumentException("El término de búsqueda no puede estar vacío");
+                throw new IllegalArgumentException("El termino de busqueda no puede estar vacio");
             }
 
             String normalizedSearchTerm = Util.normalizeString(searchTerm.trim());
 
-            // Búsqueda eficiente usando índice con referencias directas (sin lookup adicional)
-            // No necesita distinct() porque usamos Set<ZipCode> que garantiza unicidad
-            List<ZipCode> results = zipCodesByNormalizedEntity.entrySet().parallelStream()
+            // Sequential stream - only ~32 entries in the entity index, parallelStream overhead not worth it
+            List<ZipCode> results = zipCodesByNormalizedEntity.entrySet().stream()
                     .filter(entry -> entry.getKey().contains(normalizedSearchTerm))
                     .flatMap(entry -> entry.getValue().stream())
                     .collect(Collectors.toList());
@@ -328,7 +371,7 @@ public class ZipCodeService {
             if (results.isEmpty()) {
                 metricsConfiguration.recordSearchError("federal_entity", "not_found");
                 throw new ZipCodeNotFoundException(
-                        "No se encontraron códigos postales para la entidad federativa: " + searchTerm
+                        "No se encontraron codigos postales para la entidad federativa: " + searchTerm
                 );
             }
 
@@ -343,18 +386,17 @@ public class ZipCodeService {
     public List<ZipCode> searchByMunicipality(String searchTerm) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
-            metricsConfiguration.recordMunicipalitySearch(searchTerm);
+            metricsConfiguration.recordSearch("municipality");
 
             if (searchTerm == null || searchTerm.trim().isEmpty()) {
                 metricsConfiguration.recordSearchError("municipality", "empty_search");
-                throw new IllegalArgumentException("El término de búsqueda no puede estar vacío");
+                throw new IllegalArgumentException("El termino de busqueda no puede estar vacio");
             }
 
             String normalizedSearchTerm = Util.normalizeString(searchTerm.trim());
 
-            // Búsqueda eficiente usando índice con referencias directas (sin lookup adicional)
-            // No necesita distinct() porque usamos Set<ZipCode> que garantiza unicidad
-            List<ZipCode> results = zipCodesByNormalizedMunicipality.entrySet().parallelStream()
+            // Sequential stream - municipality index has ~2500 entries, still fast enough sequentially
+            List<ZipCode> results = zipCodesByNormalizedMunicipality.entrySet().stream()
                     .filter(entry -> entry.getKey().contains(normalizedSearchTerm))
                     .flatMap(entry -> entry.getValue().stream())
                     .collect(Collectors.toList());
@@ -362,7 +404,7 @@ public class ZipCodeService {
             if (results.isEmpty()) {
                 metricsConfiguration.recordSearchError("municipality", "not_found");
                 throw new ZipCodeNotFoundException(
-                        "No se encontraron códigos postales para el municipio: " + searchTerm
+                        "No se encontraron codigos postales para el municipio: " + searchTerm
                 );
             }
 
@@ -373,60 +415,66 @@ public class ZipCodeService {
         }
     }
 
+    /**
+     * Returns pre-computed statistics (calculated once at startup).
+     */
     public ZipCodeStats getStatistics() {
-        long totalSettlements = zipCodesByCode.values().stream()
-                .mapToLong(zc -> zc.getSettlements().size())
-                .sum();
-
-        return ZipCodeStats.builder()
-                .totalZipCodes(zipCodesByCode.size())
-                .totalFederalEntities(zipCodesByNormalizedEntity.size())
-                .totalMunicipalities(zipCodesByNormalizedMunicipality.size())
-                .totalSettlements(totalSettlements)
-                .build();
+        return cachedStats;
     }
 
     /**
-     * Búsqueda parcial de códigos postales.
-     * Permite buscar con códigos incompletos (ej: "010" encuentra "01000", "01010", etc.)
-     *
-     * @param partialCode Código postal parcial (mínimo 1 dígito)
-     * @param limit Número máximo de resultados (default 10, max 50)
-     * @return Lista de códigos postales que coinciden con el prefijo
+     * Prefix search using ConcurrentSkipListMap.subMap() for O(log n + k) performance.
+     * Uses exclusive upper bound with incremented prefix for correct range matching.
+     * 
+     * For example, prefix "019" matches codes in range ["01900", "01999"].
+     * The upper bound is computed by incrementing the last character: "019" -> "020",
+     * then using subMap("019", "020") which gives us all codes starting with "019".
      */
     @Cacheable(value = "partialSearch", key = "#partialCode + '_' + #limit")
     public List<ZipCode> searchByPartialCode(String partialCode, int limit) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
-            metricsConfiguration.recordZipCodeSearch("partial:" + partialCode);
+            metricsConfiguration.recordSearch("partial");
 
             if (partialCode == null || partialCode.trim().isEmpty()) {
                 metricsConfiguration.recordSearchError("partial", "empty_search");
-                throw new IllegalArgumentException("El código postal parcial no puede estar vacío");
+                throw new IllegalArgumentException("El codigo postal no puede estar vacio");
             }
 
             String cleanCode = partialCode.trim();
 
-            // Validar que solo contenga dígitos
-            if (!cleanCode.matches("\\d+")) {
+            if (!DIGITS_PATTERN.matcher(cleanCode).matches()) {
                 metricsConfiguration.recordSearchError("partial", "invalid_format");
-                throw new IllegalArgumentException("El código postal solo debe contener dígitos");
+                throw new IllegalArgumentException("El codigo postal solo debe contener digitos");
             }
 
-            // Limitar el tamaño del resultado
             int effectiveLimit = Math.min(Math.max(limit, 1), 50);
 
-            List<ZipCode> results = zipCodesByCode.entrySet().parallelStream()
-                    .filter(entry -> entry.getKey().startsWith(cleanCode))
-                    .map(Map.Entry::getValue)
-                    .sorted(Comparator.comparing(ZipCode::getZipCode))
+            // O(log n + k) using sorted map range query.
+            // Compute upper bound by appending '0' repeated to 5 chars, then increment.
+            // E.g., "019" -> "01900000" (pad to 8) -> increment last position -> "01900001"
+            // But simpler: use the prefix as lower bound, and prefix-with-0-padded as upper.
+            // 
+            // For 5-digit zip codes:
+            //   prefix "019" matches "01900" to "01999"
+            //   fromKey = "019" (includes "019", "0190", "01900", "019000", etc.)
+            //   toKey = "019" + "0" repeated = "01900" for exclusive upper bound
+            //   
+            // Better approach: use the next prefix after incrementing.
+            // "019" -> range ["019", "020") covers all codes starting with "019"
+            
+            String fromKey = cleanCode;
+            String toKey = computeUpperBound(cleanCode);
+
+            List<ZipCode> results = zipCodesSorted.subMap(fromKey, true, toKey, false)
+                    .values().stream()
                     .limit(effectiveLimit)
                     .collect(Collectors.toList());
 
             if (results.isEmpty()) {
                 metricsConfiguration.recordSearchError("partial", "not_found");
                 throw new ZipCodeNotFoundException(
-                        "No se encontraron códigos postales que inicien con: " + partialCode
+                        "No se encontraron codigos postales que inicien con: " + partialCode
                 );
             }
 
@@ -438,63 +486,63 @@ public class ZipCodeService {
     }
 
     /**
-     * Obtiene la lista de todas las entidades federativas (estados) de México.
-     *
-     * @return Lista de entidades federativas con sus estadísticas
+     * Computes the exclusive upper bound for prefix-based range queries.
+     * 
+     * For prefix "019", returns "020" so subMap("019", true, "020", false) 
+     * includes all keys starting with "019" but excludes those starting with "020".
+     * 
+     * Handles edge cases:
+     * - "019" -> "020" (increment last digit, handle carry)
+     * - "99999" -> "999999" (overflow, returns very high key)
+     * - "0" -> "1" 
+     */
+    private String computeUpperBound(String prefix) {
+        // Try to increment the prefix to get the next lexicographic boundary
+        char[] chars = prefix.toCharArray();
+        int i = chars.length - 1;
+        
+        // Find the rightmost non-9 digit
+        while (i >= 0 && chars[i] == '9') {
+            i--;
+        }
+        
+        if (i < 0) {
+            // All 9s: overflow case, return a very high key
+            // E.g., "999" -> "999999999" (all 9s padded)
+            return "9".repeat(Math.max(prefix.length(), 5) + 1);
+        }
+        
+        // Increment this digit and we're done
+        chars[i]++;
+        return new String(chars);
+    }
+
+    /**
+     * Returns pre-computed federal entities list (calculated once at startup).
      */
     @Cacheable(value = "federalEntities")
     public List<FederalEntity> getAllFederalEntities() {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
-            // Agrupar códigos postales por entidad federativa original (no normalizada)
-            Map<String, List<ZipCode>> zipCodesByEntity = zipCodesByCode.values().stream()
-                    .collect(Collectors.groupingBy(ZipCode::getFederalEntity));
-
-            List<FederalEntity> entities = zipCodesByEntity.entrySet().stream()
-                    .map(entry -> {
-                        String entityName = entry.getKey();
-                        List<ZipCode> zipCodes = entry.getValue();
-
-                        // Contar municipios únicos para esta entidad
-                        long municipalitiesCount = zipCodes.stream()
-                                .map(ZipCode::getMunicipality)
-                                .distinct()
-                                .count();
-
-                        return FederalEntity.builder()
-                                .name(entityName)
-                                .zipCodesCount(zipCodes.size())
-                                .municipalitiesCount((int) municipalitiesCount)
-                                .build();
-                    })
-                    .sorted(Comparator.comparing(FederalEntity::getName))
-                    .collect(Collectors.toList());
-
-            metricsConfiguration.recordResultSize("federal_entities", entities.size());
-            return entities;
+            metricsConfiguration.recordResultSize("federal_entities", cachedFederalEntities.size());
+            return cachedFederalEntities;
         } finally {
             metricsConfiguration.recordSearchDuration(sample, "federal_entities");
         }
     }
 
-    /**
-     * Obtiene la lista de municipios de una entidad federativa específica.
-     *
-     * @param federalEntity Nombre de la entidad federativa
-     * @return Lista de nombres de municipios
-     */
     @Cacheable(value = "municipalitiesByEntity", key = "#federalEntity.toLowerCase()")
     public List<String> getMunicipalitiesByFederalEntity(String federalEntity) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
             if (federalEntity == null || federalEntity.trim().isEmpty()) {
-                throw new IllegalArgumentException("La entidad federativa no puede estar vacía");
+                throw new IllegalArgumentException("La entidad federativa no puede estar vacia");
             }
 
             String normalizedSearchTerm = Util.normalizeString(federalEntity.trim());
 
-            // Buscar la entidad y obtener sus municipios únicos
-            List<String> municipalities = zipCodesByNormalizedEntity.entrySet().parallelStream()
+            // Sequential stream - only ~32 entity keys to filter
+            List<String> municipalities = zipCodesByNormalizedEntity.entrySet().stream()
                     .filter(entry -> entry.getKey().contains(normalizedSearchTerm))
                     .flatMap(entry -> entry.getValue().stream())
                     .map(ZipCode::getMunicipality)
@@ -515,37 +563,27 @@ public class ZipCodeService {
         }
     }
 
-    /**
-     * Obtiene las colonias/asentamientos de un código postal específico.
-     *
-     * @param zipcode Código postal de 5 dígitos
-     * @return Lista de asentamientos
-     */
     public List<Settlements> getSettlementsByZipCode(String zipcode) {
         ZipCode zipCode = getZipCode(zipcode);
         return zipCode.getSettlements();
     }
 
     /**
-     * Búsqueda avanzada con múltiples filtros.
-     *
-     * @param request Objeto con los filtros de búsqueda
-     * @return Lista de códigos postales que coinciden con todos los filtros
+     * Advanced search using inverted indices as starting point when possible.
+     * Uses pre-computed normalized fields to avoid runtime normalization.
      */
     @Cacheable(value = "advancedSearch", key = "#request.toString()")
     public List<ZipCode> advancedSearch(AdvancedSearchRequest request) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
-            // Validar que al menos un filtro esté presente
             if ((request.getFederalEntity() == null || request.getFederalEntity().isBlank()) &&
                 (request.getMunicipality() == null || request.getMunicipality().isBlank()) &&
                 (request.getSettlement() == null || request.getSettlement().isBlank()) &&
                 (request.getSettlementType() == null || request.getSettlementType().isBlank()) &&
                 (request.getZoneType() == null || request.getZoneType().isBlank())) {
-                throw new IllegalArgumentException("Debe proporcionar al menos un criterio de búsqueda");
+                throw new IllegalArgumentException("Debe proporcionar al menos un criterio de busqueda");
             }
 
-            // Normalizar términos de búsqueda
             String normalizedEntity = request.getFederalEntity() != null ?
                     Util.normalizeString(request.getFederalEntity().trim()) : null;
             String normalizedMunicipality = request.getMunicipality() != null ?
@@ -557,25 +595,26 @@ public class ZipCodeService {
             String normalizedZoneType = request.getZoneType() != null ?
                     Util.normalizeString(request.getZoneType().trim()) : null;
 
-            List<ZipCode> results = zipCodesByCode.values().parallelStream()
+            // Use inverted indices as starting point to reduce scan scope
+            Collection<ZipCode> candidates = resolveSearchCandidates(normalizedEntity, normalizedMunicipality);
+
+            List<ZipCode> results = candidates.stream()
                     .filter(zipCode -> {
-                        // Filtrar por entidad federativa
+                        // Filter by entity using pre-computed normalized field
                         if (normalizedEntity != null && !normalizedEntity.isEmpty()) {
-                            String zipEntity = Util.normalizeString(zipCode.getFederalEntity());
-                            if (!zipEntity.contains(normalizedEntity)) {
+                            if (!zipCode.getNormalizedFederalEntity().contains(normalizedEntity)) {
                                 return false;
                             }
                         }
 
-                        // Filtrar por municipio
+                        // Filter by municipality using pre-computed normalized field
                         if (normalizedMunicipality != null && !normalizedMunicipality.isEmpty()) {
-                            String zipMunicipality = Util.normalizeString(zipCode.getMunicipality());
-                            if (!zipMunicipality.contains(normalizedMunicipality)) {
+                            if (!zipCode.getNormalizedMunicipality().contains(normalizedMunicipality)) {
                                 return false;
                             }
                         }
 
-                        // Filtrar por asentamiento, tipo de asentamiento o tipo de zona
+                        // Filter by settlement fields using pre-computed normalized fields
                         if ((normalizedSettlement != null && !normalizedSettlement.isEmpty()) ||
                             (normalizedSettlementType != null && !normalizedSettlementType.isEmpty()) ||
                             (normalizedZoneType != null && !normalizedZoneType.isEmpty())) {
@@ -585,17 +624,26 @@ public class ZipCodeService {
                                         boolean matches = true;
 
                                         if (normalizedSettlement != null && !normalizedSettlement.isEmpty()) {
-                                            String settlementName = Util.normalizeString(settlement.getName());
+                                            // Use pre-computed normalized field instead of runtime normalization
+                                            String settlementName = settlement.getNormalizedName() != null 
+                                                    ? settlement.getNormalizedName() 
+                                                    : Util.normalizeString(settlement.getName());
                                             matches = settlementName.contains(normalizedSettlement);
                                         }
 
                                         if (matches && normalizedSettlementType != null && !normalizedSettlementType.isEmpty()) {
-                                            String type = Util.normalizeString(settlement.getSettlementType());
+                                            // Use pre-computed normalized field instead of runtime normalization
+                                            String type = settlement.getNormalizedSettlementType() != null 
+                                                    ? settlement.getNormalizedSettlementType() 
+                                                    : Util.normalizeString(settlement.getSettlementType());
                                             matches = type.contains(normalizedSettlementType);
                                         }
 
                                         if (matches && normalizedZoneType != null && !normalizedZoneType.isEmpty()) {
-                                            String zone = Util.normalizeString(settlement.getZoneType());
+                                            // Use pre-computed normalized field instead of runtime normalization
+                                            String zone = settlement.getNormalizedZoneType() != null 
+                                                    ? settlement.getNormalizedZoneType() 
+                                                    : Util.normalizeString(settlement.getZoneType());
                                             matches = zone.contains(normalizedZoneType);
                                         }
 
@@ -614,7 +662,7 @@ public class ZipCodeService {
 
             if (results.isEmpty()) {
                 metricsConfiguration.recordSearchError("advanced", "not_found");
-                throw new ZipCodeNotFoundException("No se encontraron códigos postales con los criterios especificados");
+                throw new ZipCodeNotFoundException("No se encontraron codigos postales con los criterios especificados");
             }
 
             metricsConfiguration.recordResultSize("advanced", results.size());
@@ -622,5 +670,66 @@ public class ZipCodeService {
         } finally {
             metricsConfiguration.recordSearchDuration(sample, "advanced");
         }
+    }
+
+    /**
+     * Creates a paginated response from a list of results.
+     * 
+     * @param allResults All results (already loaded in memory)
+     * @param page Page number (0-based)
+     * @param size Page size
+     * @param <T> Result type
+     * @return PaginatedResponse with the sliced results
+     */
+    public static <T> PagedResponse<T> createPagedResponse(List<T> allResults, int page, int size) {
+        int totalElements = allResults.size();
+        int totalPages = (int) Math.ceil((double) totalElements / size);
+        int start = Math.min(page * size, totalElements);
+        int end = Math.min(start + size, totalElements);
+
+        List<T> pagedResults = (start < end && totalElements > 0) 
+                ? allResults.subList(start, end) 
+                : List.of();
+
+        return PagedResponse.<T>builder()
+                .content(pagedResults)
+                .pageNumber(page)
+                .pageSize(size)
+                .totalElements(totalElements)
+                .totalPages(totalPages)
+                .first(page == 0)
+                .last(page >= totalPages - 1)
+                .build();
+    }
+
+    /**
+     * Resolves the smallest candidate set using available inverted indices.
+     * Prefers entity index (fewer entries) over municipality, falls back to full scan only when needed.
+     */
+    private Collection<ZipCode> resolveSearchCandidates(String normalizedEntity, String normalizedMunicipality) {
+        // If entity filter is present, use entity index (narrows to ~2K from ~32K)
+        if (normalizedEntity != null && !normalizedEntity.isEmpty()) {
+            Set<ZipCode> candidates = new HashSet<>();
+            zipCodesByNormalizedEntity.entrySet().stream()
+                    .filter(entry -> entry.getKey().contains(normalizedEntity))
+                    .forEach(entry -> candidates.addAll(entry.getValue()));
+            if (!candidates.isEmpty()) {
+                return candidates;
+            }
+        }
+
+        // If municipality filter is present, use municipality index
+        if (normalizedMunicipality != null && !normalizedMunicipality.isEmpty()) {
+            Set<ZipCode> candidates = new HashSet<>();
+            zipCodesByNormalizedMunicipality.entrySet().stream()
+                    .filter(entry -> entry.getKey().contains(normalizedMunicipality))
+                    .forEach(entry -> candidates.addAll(entry.getValue()));
+            if (!candidates.isEmpty()) {
+                return candidates;
+            }
+        }
+
+        // Fallback: full scan (only when filtering by settlement/type/zone only)
+        return zipCodesByCode.values();
     }
 }

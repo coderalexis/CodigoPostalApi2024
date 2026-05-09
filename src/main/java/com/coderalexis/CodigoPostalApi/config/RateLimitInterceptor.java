@@ -1,8 +1,9 @@
 package com.coderalexis.CodigoPostalApi.config;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
-import io.github.bucket4j.Refill;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
@@ -11,23 +12,26 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
 import java.time.Duration;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Rate limiting interceptor using Token Bucket algorithm (Bucket4j).
- * Limits requests per IP address or globally based on configuration.
+ * Uses Caffeine cache for automatic bucket eviction to prevent memory leaks.
  */
 @Slf4j
 @Component
 public class RateLimitInterceptor implements HandlerInterceptor {
 
     private final RateLimitProperties rateLimitProperties;
-    // Cache of buckets per IP address
-    private final Map<String, Bucket> cache = new ConcurrentHashMap<>();
+    // Caffeine cache with TTL-based eviction (buckets expire after 5 minutes of inactivity)
+    private final Cache<String, Bucket> bucketCache;
 
     public RateLimitInterceptor(RateLimitProperties rateLimitProperties) {
         this.rateLimitProperties = rateLimitProperties;
+        this.bucketCache = Caffeine.newBuilder()
+                .maximumSize(10_000)
+                .expireAfterAccess(5, TimeUnit.MINUTES)
+                .build();
     }
 
     @Override
@@ -44,7 +48,7 @@ public class RateLimitInterceptor implements HandlerInterceptor {
         }
 
         String key = rateLimitProperties.isIpBased() ? clientIp : "global";
-        Bucket bucket = resolveBucket(key);
+        Bucket bucket = bucketCache.get(key, k -> createNewBucket());
 
         if (bucket.tryConsume(1)) {
             long availableTokens = bucket.getAvailableTokens();
@@ -60,16 +64,12 @@ public class RateLimitInterceptor implements HandlerInterceptor {
         response.setHeader("X-RateLimit-Retry-After-Seconds", "60");
         response.setContentType("application/json");
         response.getWriter().write(String.format(
-            "{\"status\":429,\"message\":\"Límite de peticiones excedido. Máximo %d peticiones por minuto.\",\"timestamp\":\"%s\"}",
+            "{\"status\":429,\"message\":\"Limite de peticiones excedido. Maximo %d peticiones por minuto.\",\"timestamp\":\"%s\"}",
             rateLimitProperties.getRequestsPerMinute(),
             java.time.LocalDateTime.now()
         ));
 
         return false;
-    }
-
-    private Bucket resolveBucket(String key) {
-        return cache.computeIfAbsent(key, k -> createNewBucket());
     }
 
     private Bucket createNewBucket() {
@@ -84,12 +84,10 @@ public class RateLimitInterceptor implements HandlerInterceptor {
     }
 
     private String getClientIP(HttpServletRequest request) {
-        // Get real client IP considering proxies and load balancers
         String xfHeader = request.getHeader("X-Forwarded-For");
         if (xfHeader == null || xfHeader.isEmpty() || "unknown".equalsIgnoreCase(xfHeader)) {
             return request.getRemoteAddr();
         }
-        // X-Forwarded-For may contain multiple IPs, take the first one
         return xfHeader.split(",")[0].trim();
     }
 
@@ -110,10 +108,6 @@ public class RateLimitInterceptor implements HandlerInterceptor {
         return false;
     }
 
-    /**
-     * Simplified CIDR matching for IPv4 ranges.
-     * For production, consider using a dedicated IP library.
-     */
     private boolean ipMatchesCIDR(String ip, String cidr) {
         try {
             String[] parts = cidr.split("/");
@@ -126,16 +120,5 @@ public class RateLimitInterceptor implements HandlerInterceptor {
         }
 
         return false;
-    }
-
-    /**
-     * Cleans old buckets to prevent memory leaks.
-     * For production, consider using Caffeine cache with TTL.
-     */
-    public void cleanupOldBuckets() {
-        if (cache.size() > 10000) {
-            log.info("Limpiando cache de buckets, tamaño actual: {}", cache.size());
-            cache.clear();
-        }
     }
 }
