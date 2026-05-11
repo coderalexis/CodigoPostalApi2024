@@ -22,4 +22,25 @@ public class Util {
         // Remove diacritics, keep only base characters
         return DIACRITICS_PATTERN.matcher(normalized).replaceAll("").toLowerCase();
     }
+
+    /**
+     * Normalizes user-entered search text by trimming whitespace before removing
+     * accents and lowercasing, so semantically equivalent searches share the same value.
+     */
+    public static String normalizeSearchTerm(String input) {
+        if (input == null) {
+            return null;
+        }
+
+        return normalizeString(input.trim());
+    }
+
+    /**
+     * Builds a null-safe cache key for search terms. Invalid null/blank values still
+     * reach method validation instead of failing during Spring cache key evaluation.
+     */
+    public static String normalizeCacheKey(String input) {
+        String normalized = normalizeSearchTerm(input);
+        return normalized == null ? "" : normalized;
+    }
 }

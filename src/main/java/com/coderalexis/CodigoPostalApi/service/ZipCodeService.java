@@ -349,7 +349,7 @@ public class ZipCodeService {
         return zipCode != null && ZIP_CODE_PATTERN.matcher(zipCode).matches();
     }
 
-    @Cacheable(value = "federalEntitySearch", key = "#searchTerm.toLowerCase()")
+    @Cacheable(value = "federalEntitySearch", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#searchTerm)")
     public List<ZipCode> searchByFederalEntity(String searchTerm) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
@@ -360,7 +360,7 @@ public class ZipCodeService {
                 throw new IllegalArgumentException("El termino de busqueda no puede estar vacio");
             }
 
-            String normalizedSearchTerm = Util.normalizeString(searchTerm.trim());
+            String normalizedSearchTerm = Util.normalizeSearchTerm(searchTerm);
 
             // Sequential stream - only ~32 entries in the entity index, parallelStream overhead not worth it
             List<ZipCode> results = zipCodesByNormalizedEntity.entrySet().stream()
@@ -382,7 +382,7 @@ public class ZipCodeService {
         }
     }
 
-    @Cacheable(value = "municipalitySearch", key = "#searchTerm.toLowerCase()")
+    @Cacheable(value = "municipalitySearch", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#searchTerm)")
     public List<ZipCode> searchByMunicipality(String searchTerm) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
@@ -393,7 +393,7 @@ public class ZipCodeService {
                 throw new IllegalArgumentException("El termino de busqueda no puede estar vacio");
             }
 
-            String normalizedSearchTerm = Util.normalizeString(searchTerm.trim());
+            String normalizedSearchTerm = Util.normalizeSearchTerm(searchTerm);
 
             // Sequential stream - municipality index has ~2500 entries, still fast enough sequentially
             List<ZipCode> results = zipCodesByNormalizedMunicipality.entrySet().stream()
@@ -430,7 +430,7 @@ public class ZipCodeService {
      * The upper bound is computed by incrementing the last character: "019" -> "020",
      * then using subMap("019", "020") which gives us all codes starting with "019".
      */
-    @Cacheable(value = "partialSearch", key = "#partialCode + '_' + #limit")
+    @Cacheable(value = "partialSearch", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#partialCode) + '_' + #limit")
     public List<ZipCode> searchByPartialCode(String partialCode, int limit) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
@@ -501,7 +501,7 @@ public class ZipCodeService {
         }
     }
 
-    @Cacheable(value = "municipalitiesByEntity", key = "#federalEntity.toLowerCase()")
+    @Cacheable(value = "municipalitiesByEntity", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#federalEntity)")
     public List<String> getMunicipalitiesByFederalEntity(String federalEntity) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
@@ -509,7 +509,7 @@ public class ZipCodeService {
                 throw new IllegalArgumentException("La entidad federativa no puede estar vacia");
             }
 
-            String normalizedSearchTerm = Util.normalizeString(federalEntity.trim());
+            String normalizedSearchTerm = Util.normalizeSearchTerm(federalEntity);
 
             // Sequential stream - only ~32 entity keys to filter
             List<String> municipalities = zipCodesByNormalizedEntity.entrySet().stream()
@@ -555,15 +555,15 @@ public class ZipCodeService {
             }
 
             String normalizedEntity = request.getFederalEntity() != null ?
-                    Util.normalizeString(request.getFederalEntity().trim()) : null;
+                    Util.normalizeSearchTerm(request.getFederalEntity()) : null;
             String normalizedMunicipality = request.getMunicipality() != null ?
-                    Util.normalizeString(request.getMunicipality().trim()) : null;
+                    Util.normalizeSearchTerm(request.getMunicipality()) : null;
             String normalizedSettlement = request.getSettlement() != null ?
-                    Util.normalizeString(request.getSettlement().trim()) : null;
+                    Util.normalizeSearchTerm(request.getSettlement()) : null;
             String normalizedSettlementType = request.getSettlementType() != null ?
-                    Util.normalizeString(request.getSettlementType().trim()) : null;
+                    Util.normalizeSearchTerm(request.getSettlementType()) : null;
             String normalizedZoneType = request.getZoneType() != null ?
-                    Util.normalizeString(request.getZoneType().trim()) : null;
+                    Util.normalizeSearchTerm(request.getZoneType()) : null;
 
             // Use inverted indices as starting point to reduce scan scope
             Collection<ZipCode> candidates = resolveSearchCandidates(normalizedEntity, normalizedMunicipality);
