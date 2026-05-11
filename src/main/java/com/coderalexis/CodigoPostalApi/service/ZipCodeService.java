@@ -443,26 +443,16 @@ public class ZipCodeService {
 
             String cleanCode = partialCode.trim();
 
-            if (!DIGITS_PATTERN.matcher(cleanCode).matches()) {
+            if (!DIGITS_PATTERN.matcher(cleanCode).matches() || cleanCode.length() > 5) {
                 metricsConfiguration.recordSearchError("partial", "invalid_format");
-                throw new IllegalArgumentException("El codigo postal solo debe contener digitos");
+                throw new IllegalArgumentException("El codigo postal debe contener entre 1 y 5 digitos");
             }
 
             int effectiveLimit = Math.min(Math.max(limit, 1), 50);
 
             // O(log n + k) using sorted map range query.
-            // Compute upper bound by appending '0' repeated to 5 chars, then increment.
-            // E.g., "019" -> "01900000" (pad to 8) -> increment last position -> "01900001"
-            // But simpler: use the prefix as lower bound, and prefix-with-0-padded as upper.
-            // 
-            // For 5-digit zip codes:
-            //   prefix "019" matches "01900" to "01999"
-            //   fromKey = "019" (includes "019", "0190", "01900", "019000", etc.)
-            //   toKey = "019" + "0" repeated = "01900" for exclusive upper bound
-            //   
-            // Better approach: use the next prefix after incrementing.
-            // "019" -> range ["019", "020") covers all codes starting with "019"
-            
+            // The exclusive upper bound is the next lexicographic prefix, so a search
+            // like "0199" only scans ["0199", "0200") and never leaks "020xx" rows.
             String fromKey = cleanCode;
             String toKey = computeUpperBound(cleanCode);
 
@@ -487,34 +477,28 @@ public class ZipCodeService {
 
     /**
      * Computes the exclusive upper bound for prefix-based range queries.
-     * 
-     * For prefix "019", returns "020" so subMap("019", true, "020", false) 
+     *
+     * For prefix "019", returns "020" so subMap("019", true, "020", false)
      * includes all keys starting with "019" but excludes those starting with "020".
-     * 
-     * Handles edge cases:
-     * - "019" -> "020" (increment last digit, handle carry)
-     * - "99999" -> "999999" (overflow, returns very high key)
-     * - "0" -> "1" 
+     *
+     * Handles carry by truncating the suffix after the incremented digit:
+     * - "019" -> "020"
+     * - "0199" -> "0200"
+     * - "999" -> ":" (the next ASCII character after '9')
      */
     private String computeUpperBound(String prefix) {
-        // Try to increment the prefix to get the next lexicographic boundary
         char[] chars = prefix.toCharArray();
-        int i = chars.length - 1;
-        
-        // Find the rightmost non-9 digit
-        while (i >= 0 && chars[i] == '9') {
-            i--;
+
+        for (int i = chars.length - 1; i >= 0; i--) {
+            if (chars[i] != '9') {
+                chars[i]++;
+                return new String(chars, 0, i + 1);
+            }
         }
-        
-        if (i < 0) {
-            // All 9s: overflow case, return a very high key
-            // E.g., "999" -> "999999999" (all 9s padded)
-            return "9".repeat(Math.max(prefix.length(), 5) + 1);
-        }
-        
-        // Increment this digit and we're done
-        chars[i]++;
-        return new String(chars);
+
+        // All-9 prefixes have no larger numeric prefix; ':' is the next ASCII
+        // character after '9', making it a safe exclusive upper bound for digit keys.
+        return ":";
     }
 
     /**
