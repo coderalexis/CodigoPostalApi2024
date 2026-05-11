@@ -28,6 +28,7 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.Collection;
 import java.util.List;
+import java.util.function.Predicate;
 
 @Service
 @Slf4j
@@ -360,31 +361,13 @@ public class ZipCodeService {
 
     @Cacheable(value = "federalEntitySearch", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#searchTerm)")
     public List<ZipCode> searchByFederalEntity(String searchTerm) {
-        // Delegates to paginated version with default page 0 and full size
-        return searchByFederalEntity(searchTerm, 0, Integer.MAX_VALUE).getContent();
-    }
-
-    /**
-     * Paginated search by federal entity.
-     * Uses skip/limit on the stream to avoid materializing the full list when pagination is applied.
-     */
-    @Cacheable(value = "federalEntitySearchPaged", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#searchTerm) + '_' + #page + '_' + #size")
-    public PagedResponse<ZipCode> searchByFederalEntity(String searchTerm, int page, int size) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
             metricsConfiguration.recordSearch("federal_entity");
+            String normalizedSearchTerm = validateSearchTerm(searchTerm, "federal_entity");
 
-            if (searchTerm == null || searchTerm.trim().isEmpty()) {
-                metricsConfiguration.recordSearchError("federal_entity", "empty_search");
-                throw new IllegalArgumentException("El termino de busqueda no puede estar vacio");
-            }
-
-            String normalizedSearchTerm = Util.normalizeSearchTerm(searchTerm);
-
-            // Sequential stream - only ~32 entries in the entity index
-            List<ZipCode> results = zipCodesByNormalizedEntity.entrySet().stream()
-                    .filter(entry -> entry.getKey().contains(normalizedSearchTerm))
-                    .flatMap(entry -> entry.getValue().stream())
+            List<ZipCode> results = zipCodesSorted.values().stream()
+                    .filter(zipCode -> zipCode.getNormalizedFederalEntity().contains(normalizedSearchTerm))
                     .collect(Collectors.toList());
 
             if (results.isEmpty()) {
@@ -395,13 +378,39 @@ public class ZipCodeService {
             }
 
             metricsConfiguration.recordResultSize("federal_entity", results.size());
+            return results;
+        } finally {
+            metricsConfiguration.recordSearchDuration(sample, "federal_entity");
+        }
+    }
 
-            // If no pagination requested (size == MAX_VALUE), return the full list directly
-            if (size == Integer.MAX_VALUE) {
-                return results;
+    /**
+     * Paginated search by federal entity.
+     * Counts matches and materializes only the requested page in zip-code order.
+     */
+    @Cacheable(value = "federalEntitySearchPaged", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#searchTerm) + '_' + #page + '_' + #size")
+    public PagedResponse<ZipCode> searchByFederalEntity(String searchTerm, int page, int size) {
+        Timer.Sample sample = metricsConfiguration.startTimer();
+        try {
+            metricsConfiguration.recordSearch("federal_entity");
+            validatePagination(page, size);
+            String normalizedSearchTerm = validateSearchTerm(searchTerm, "federal_entity");
+
+            PagedResponse<ZipCode> response = createPagedResponse(
+                    zipCodesSorted.values(),
+                    zipCode -> zipCode.getNormalizedFederalEntity().contains(normalizedSearchTerm),
+                    page,
+                    size);
+
+            if (response.getTotalElements() == 0) {
+                metricsConfiguration.recordSearchError("federal_entity", "not_found");
+                throw new ZipCodeNotFoundException(
+                        "No se encontraron codigos postales para la entidad federativa: " + searchTerm
+                );
             }
 
-            return buildPagedResponse(results, page, size, "federal_entity");
+            metricsConfiguration.recordResultSize("federal_entity", (int) response.getTotalElements());
+            return response;
         } finally {
             metricsConfiguration.recordSearchDuration(sample, "federal_entity");
         }
@@ -409,31 +418,13 @@ public class ZipCodeService {
 
     @Cacheable(value = "municipalitySearch", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#searchTerm)")
     public List<ZipCode> searchByMunicipality(String searchTerm) {
-        // Delegates to paginated version with default page 0 and full size
-        return searchByMunicipality(searchTerm, 0, Integer.MAX_VALUE).getContent();
-    }
-
-    /**
-     * Paginated search by municipality.
-     * Uses skip/limit on the stream to avoid materializing the full list when pagination is applied.
-     */
-    @Cacheable(value = "municipalitySearchPaged", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#searchTerm) + '_' + #page + '_' + #size")
-    public PagedResponse<ZipCode> searchByMunicipality(String searchTerm, int page, int size) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
             metricsConfiguration.recordSearch("municipality");
+            String normalizedSearchTerm = validateSearchTerm(searchTerm, "municipality");
 
-            if (searchTerm == null || searchTerm.trim().isEmpty()) {
-                metricsConfiguration.recordSearchError("municipality", "empty_search");
-                throw new IllegalArgumentException("El termino de busqueda no puede estar vacio");
-            }
-
-            String normalizedSearchTerm = Util.normalizeSearchTerm(searchTerm);
-
-            // Sequential stream - municipality index has ~2500 entries
-            List<ZipCode> results = zipCodesByNormalizedMunicipality.entrySet().stream()
-                    .filter(entry -> entry.getKey().contains(normalizedSearchTerm))
-                    .flatMap(entry -> entry.getValue().stream())
+            List<ZipCode> results = zipCodesSorted.values().stream()
+                    .filter(zipCode -> zipCode.getNormalizedMunicipality().contains(normalizedSearchTerm))
                     .collect(Collectors.toList());
 
             if (results.isEmpty()) {
@@ -444,13 +435,39 @@ public class ZipCodeService {
             }
 
             metricsConfiguration.recordResultSize("municipality", results.size());
+            return results;
+        } finally {
+            metricsConfiguration.recordSearchDuration(sample, "municipality");
+        }
+    }
 
-            // If no pagination requested (size == MAX_VALUE), return the full list directly
-            if (size == Integer.MAX_VALUE) {
-                return results;
+    /**
+     * Paginated search by municipality.
+     * Counts matches and materializes only the requested page in zip-code order.
+     */
+    @Cacheable(value = "municipalitySearchPaged", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#searchTerm) + '_' + #page + '_' + #size")
+    public PagedResponse<ZipCode> searchByMunicipality(String searchTerm, int page, int size) {
+        Timer.Sample sample = metricsConfiguration.startTimer();
+        try {
+            metricsConfiguration.recordSearch("municipality");
+            validatePagination(page, size);
+            String normalizedSearchTerm = validateSearchTerm(searchTerm, "municipality");
+
+            PagedResponse<ZipCode> response = createPagedResponse(
+                    zipCodesSorted.values(),
+                    zipCode -> zipCode.getNormalizedMunicipality().contains(normalizedSearchTerm),
+                    page,
+                    size);
+
+            if (response.getTotalElements() == 0) {
+                metricsConfiguration.recordSearchError("municipality", "not_found");
+                throw new ZipCodeNotFoundException(
+                        "No se encontraron codigos postales para el municipio: " + searchTerm
+                );
             }
 
-            return buildPagedResponse(results, page, size, "municipality");
+            metricsConfiguration.recordResultSize("municipality", (int) response.getTotalElements());
+            return response;
         } finally {
             metricsConfiguration.recordSearchDuration(sample, "municipality");
         }
@@ -686,7 +703,7 @@ public class ZipCodeService {
     /**
      * Creates a paginated response from a list of results.
      * Uses long arithmetic to prevent overflow when page * size exceeds Integer.MAX_VALUE.
-     * 
+     *
      * @param allResults All results (already loaded in memory)
      * @param page Page number (0-based)
      * @param size Page size
@@ -694,49 +711,93 @@ public class ZipCodeService {
      * @return PaginatedResponse with the sliced results (empty if page exceeds bounds)
      */
     public static <T> PagedResponse<T> createPagedResponse(List<T> allResults, int page, int size) {
+        validatePagination(page, size);
+
         int totalElements = allResults.size();
-        
-        // Prevent overflow: use long arithmetic for the offset calculation
-        long offset = Math.multiplyExact((long) page, (long) size);
-        
-        // If offset exceeds total elements, return empty page
+        int totalPages = calculateTotalPages(totalElements, size);
+        long offset = (long) page * size;
+
         if (offset >= totalElements) {
-            int totalPages = totalElements > 0 ? (int) Math.ceil((double) totalElements / size) : 0;
-            return PagedResponse.<T>builder()
-                    .content(List.of())
-                    .pageNumber(page)
-                    .pageSize(size)
-                    .totalElements(totalElements)
-                    .totalPages(totalPages)
-                    .first(false)
-                    .last(true)
-                    .build();
+            return buildPagedResponse(List.of(), page, size, totalElements, totalPages);
         }
 
         int start = (int) offset; // Safe: offset < totalElements which is an int
         int end = Math.min(start + size, totalElements);
-
-        List<T> pagedResults = (start < end && totalElements > 0) 
-                ? allResults.subList(start, end) 
-                : List.of();
-
-        return PagedResponse.<T>builder()
-                .content(pagedResults)
-                .pageNumber(page)
-                .pageSize(size)
-                .totalElements(totalElements)
-                .totalPages((int) Math.ceil((double) totalElements / size))
-                .first(page == 0)
-                .last(page >= ((int) Math.ceil((double) totalElements / size)) - 1)
-                .build();
+        return buildPagedResponse(allResults.subList(start, end), page, size, totalElements, totalPages);
     }
 
     /**
-     * Builds a paginated response from pre-computed results, recording metrics.
+     * Creates a paginated response from a collection without materializing the full
+     * filtered result set. The collection iteration order is preserved.
+     * This avoids allocating a List of ALL matches when only a small page is needed.
      */
-    private <T> PagedResponse<T> buildPagedResponse(List<T> allResults, int page, int size, String searchType) {
-        metricsConfiguration.recordResultSize(searchType, allResults.size());
-        return createPagedResponse(allResults, page, size);
+    private static <T> PagedResponse<T> createPagedResponse(
+            Collection<T> candidates,
+            Predicate<T> filter,
+            int page,
+            int size) {
+        validatePagination(page, size);
+
+        long offset = (long) page * size;
+        List<T> pageContent = new ArrayList<>(size);
+        int totalElements = 0;
+
+        for (T candidate : candidates) {
+            if (!filter.test(candidate)) {
+                continue;
+            }
+
+            if (totalElements >= offset && pageContent.size() < size) {
+                pageContent.add(candidate);
+            }
+            totalElements++;
+        }
+
+        return buildPagedResponse(
+                pageContent,
+                page,
+                size,
+                totalElements,
+                calculateTotalPages(totalElements, size));
+    }
+
+    private static <T> PagedResponse<T> buildPagedResponse(
+            List<T> content,
+            int page,
+            int size,
+            int totalElements,
+            int totalPages) {
+        return PagedResponse.<T>builder()
+                .content(content)
+                .pageNumber(page)
+                .pageSize(size)
+                .totalElements(totalElements)
+                .totalPages(totalPages)
+                .first(page == 0)
+                .last(totalPages == 0 || page >= totalPages - 1)
+                .build();
+    }
+
+    private static int calculateTotalPages(int totalElements, int size) {
+        return totalElements == 0 ? 0 : (int) Math.ceil((double) totalElements / size);
+    }
+
+    private static void validatePagination(int page, int size) {
+        if (page < 0) {
+            throw new IllegalArgumentException("La pagina debe ser mayor o igual a 0");
+        }
+        if (size < 1) {
+            throw new IllegalArgumentException("El tamaño debe ser mayor a 0");
+        }
+    }
+
+    private String validateSearchTerm(String searchTerm, String searchType) {
+        if (searchTerm == null || searchTerm.trim().isEmpty()) {
+            metricsConfiguration.recordSearchError(searchType, "empty_search");
+            throw new IllegalArgumentException("El termino de busqueda no puede estar vacio");
+        }
+
+        return Util.normalizeSearchTerm(searchTerm);
     }
 
     /**
