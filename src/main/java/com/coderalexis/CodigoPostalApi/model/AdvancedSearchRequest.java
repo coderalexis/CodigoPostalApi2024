@@ -1,5 +1,6 @@
 package com.coderalexis.CodigoPostalApi.model;
 
+import com.coderalexis.CodigoPostalApi.util.Util;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Max;
@@ -51,4 +52,18 @@ public class AdvancedSearchRequest {
     @Schema(description = "Si es true, devuelve formato simplificado sin lista de asentamientos", example = "false")
     @Builder.Default
     private boolean simplified = false;
+
+    /**
+     * Stable cache key for the expensive, unpaged advanced-search result set.
+     * Page, size, and simplified are intentionally excluded because pagination
+     * and presentation mapping are applied after retrieving the full result list.
+     */
+    public String normalizedFilterCacheKey() {
+        return String.join("|",
+                Util.normalizeCacheKey(federalEntity),
+                Util.normalizeCacheKey(municipality),
+                Util.normalizeCacheKey(settlement),
+                Util.normalizeCacheKey(settlementType),
+                Util.normalizeCacheKey(zoneType));
+    }
 }

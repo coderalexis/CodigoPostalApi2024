@@ -1,6 +1,7 @@
 package com.coderalexis.CodigoPostalApi.service;
 
 import com.coderalexis.CodigoPostalApi.exceptions.ZipCodeNotFoundException;
+import com.coderalexis.CodigoPostalApi.model.AdvancedSearchRequest;
 import com.coderalexis.CodigoPostalApi.model.ZipCode;
 import com.coderalexis.CodigoPostalApi.model.ZipCodeStats;
 import org.junit.jupiter.api.Test;
@@ -213,5 +214,30 @@ class ZipCodeServiceTest {
         assertNotNull(results);
         // Este test puede pasar o fallar dependiendo del contenido del archivo
         // Si no hay municipios con "gua", ajusta el término de búsqueda
+    }
+
+    @Test
+    @DisplayName("Debe usar la misma llave de cache avanzada para distintas paginas y formatos")
+    void shouldUseSameAdvancedSearchCacheKeyForPaginationAndFormatOptions() {
+        AdvancedSearchRequest firstPage = AdvancedSearchRequest.builder()
+                .federalEntity(" Jalisco ")
+                .municipality("Guadalajara")
+                .zoneType("Urbano")
+                .page(0)
+                .size(20)
+                .simplified(false)
+                .build();
+
+        AdvancedSearchRequest secondPageSimplified = AdvancedSearchRequest.builder()
+                .federalEntity("jalisco")
+                .municipality("guadalajara")
+                .zoneType("urbano")
+                .page(3)
+                .size(5)
+                .simplified(true)
+                .build();
+
+        assertEquals(firstPage.normalizedFilterCacheKey(), secondPageSimplified.normalizedFilterCacheKey(),
+            "La cache de busqueda avanzada debe depender solo de los filtros normalizados");
     }
 }
