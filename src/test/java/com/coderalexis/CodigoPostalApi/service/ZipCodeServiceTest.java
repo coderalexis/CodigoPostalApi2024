@@ -93,6 +93,15 @@ class ZipCodeServiceTest {
         }, "Debe lanzar ZipCodeNotFoundException para entidad inexistente");
     }
 
+
+    @Test
+    @DisplayName("Debe validar nulos antes de generar la llave de cache en entidad")
+    void shouldValidateNullFederalEntityBeforeCacheKey() {
+        assertThrows(IllegalArgumentException.class, () -> {
+            zipCodeService.searchByFederalEntity(null);
+        }, "Debe lanzar IllegalArgumentException para término null");
+    }
+
     @Test
     @DisplayName("Debe lanzar excepción para término de búsqueda vacío en entidad")
     void shouldThrowExceptionForEmptyFederalEntitySearch() {
