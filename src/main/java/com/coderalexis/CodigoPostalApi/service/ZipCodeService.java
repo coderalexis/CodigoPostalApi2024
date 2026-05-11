@@ -542,7 +542,7 @@ public class ZipCodeService {
      * Advanced search using inverted indices as starting point when possible.
      * Uses pre-computed normalized fields to avoid runtime normalization.
      */
-    @Cacheable(value = "advancedSearch", key = "#request.toString()")
+    @Cacheable(value = "advancedSearch", key = "#request.normalizedFilterCacheKey()")
     public List<ZipCode> advancedSearch(AdvancedSearchRequest request) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
@@ -674,32 +674,55 @@ public class ZipCodeService {
 
     /**
      * Resolves the smallest candidate set using available inverted indices.
-     * Prefers entity index (fewer entries) over municipality, falls back to full scan only when needed.
+     *
+     * If an indexed filter is present but has no matches, it returns an empty
+     * candidate set immediately because advanced-search filters are combined with
+     * AND semantics. This avoids a full catalog scan for impossible entity or
+     * municipality criteria.
      */
     private Collection<ZipCode> resolveSearchCandidates(String normalizedEntity, String normalizedMunicipality) {
-        // If entity filter is present, use entity index (narrows to ~2K from ~32K)
-        if (normalizedEntity != null && !normalizedEntity.isEmpty()) {
-            Set<ZipCode> candidates = new HashSet<>();
-            zipCodesByNormalizedEntity.entrySet().stream()
-                    .filter(entry -> entry.getKey().contains(normalizedEntity))
-                    .forEach(entry -> candidates.addAll(entry.getValue()));
-            if (!candidates.isEmpty()) {
-                return candidates;
-            }
+        Set<ZipCode> entityCandidates = findCandidatesInIndex(zipCodesByNormalizedEntity, normalizedEntity);
+        if (isFilterPresent(normalizedEntity) && entityCandidates.isEmpty()) {
+            return List.of();
         }
 
-        // If municipality filter is present, use municipality index
-        if (normalizedMunicipality != null && !normalizedMunicipality.isEmpty()) {
-            Set<ZipCode> candidates = new HashSet<>();
-            zipCodesByNormalizedMunicipality.entrySet().stream()
-                    .filter(entry -> entry.getKey().contains(normalizedMunicipality))
-                    .forEach(entry -> candidates.addAll(entry.getValue()));
-            if (!candidates.isEmpty()) {
-                return candidates;
-            }
+        Set<ZipCode> municipalityCandidates = findCandidatesInIndex(
+                zipCodesByNormalizedMunicipality, normalizedMunicipality);
+        if (isFilterPresent(normalizedMunicipality) && municipalityCandidates.isEmpty()) {
+            return List.of();
         }
 
-        // Fallback: full scan (only when filtering by settlement/type/zone only)
+        if (!entityCandidates.isEmpty() && !municipalityCandidates.isEmpty()) {
+            return entityCandidates.size() <= municipalityCandidates.size()
+                    ? entityCandidates
+                    : municipalityCandidates;
+        }
+
+        if (!entityCandidates.isEmpty()) {
+            return entityCandidates;
+        }
+
+        if (!municipalityCandidates.isEmpty()) {
+            return municipalityCandidates;
+        }
+
+        // Fallback: full scan only when filtering by settlement/type/zone.
         return zipCodesByCode.values();
+    }
+
+    private Set<ZipCode> findCandidatesInIndex(Map<String, Set<ZipCode>> index, String normalizedSearchTerm) {
+        if (!isFilterPresent(normalizedSearchTerm)) {
+            return Set.of();
+        }
+
+        Set<ZipCode> candidates = new HashSet<>();
+        index.entrySet().stream()
+                .filter(entry -> entry.getKey().contains(normalizedSearchTerm))
+                .forEach(entry -> candidates.addAll(entry.getValue()));
+        return candidates;
+    }
+
+    private boolean isFilterPresent(String normalizedSearchTerm) {
+        return normalizedSearchTerm != null && !normalizedSearchTerm.isEmpty();
     }
 }
