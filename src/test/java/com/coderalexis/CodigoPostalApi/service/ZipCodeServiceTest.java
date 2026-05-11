@@ -3,7 +3,6 @@ package com.coderalexis.CodigoPostalApi.service;
 import com.coderalexis.CodigoPostalApi.exceptions.ZipCodeNotFoundException;
 import com.coderalexis.CodigoPostalApi.model.ZipCode;
 import com.coderalexis.CodigoPostalApi.model.ZipCodeStats;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -165,6 +164,27 @@ class ZipCodeServiceTest {
         // La cantidad de asentamientos debe ser mayor o igual a la de códigos postales
         assertTrue(stats.getTotalSettlements() >= stats.getTotalZipCodes(),
             "Debe haber al menos tantos asentamientos como códigos postales");
+    }
+
+    @Test
+    @DisplayName("Debe buscar códigos postales por prefijo sin incluir otros rangos")
+    void shouldSearchByPartialCodeWithoutLeakingNextRange() {
+        List<ZipCode> results = zipCodeService.searchByPartialCode("019", 10);
+
+        assertNotNull(results);
+        assertFalse(results.isEmpty(), "Debe encontrar códigos que inicien con 019");
+        assertTrue(results.stream().allMatch(zipCode -> zipCode.getZipCode().startsWith("019")),
+            "Todos los resultados deben iniciar exactamente con el prefijo solicitado");
+
+        assertThrows(ZipCodeNotFoundException.class, () -> zipCodeService.searchByPartialCode("0199", 10),
+            "No debe regresar códigos 020xx cuando el prefijo solicitado es 0199");
+    }
+
+    @Test
+    @DisplayName("Debe validar longitud máxima en búsqueda parcial")
+    void shouldRejectPartialCodeLongerThanFiveDigits() {
+        assertThrows(IllegalArgumentException.class, () -> zipCodeService.searchByPartialCode("010000", 10),
+            "La búsqueda parcial debe aceptar máximo 5 dígitos");
     }
 
     @Test
