@@ -150,6 +150,7 @@ public class Controller {
             @Parameter(description = "Número de página (comienza en 0)")
             @RequestParam(value = "page", defaultValue = "0")
             @Min(value = 0, message = "La página debe ser mayor o igual a 0")
+            @Max(value = 10_000, message = "El número de página es inválido")
             int page,
 
             @Parameter(description = "Tamaño de página")
@@ -158,9 +159,8 @@ public class Controller {
             @Max(value = 100, message = "El tamaño máximo es 100")
             int size
     ) {
-        List<ZipCode> allResults = zipCodeService.searchByFederalEntity(federalEntity);
-        PagedResponse<ZipCode> response = ZipCodeService.createPagedResponse(allResults, page, size);
-
+        // Service handles pagination internally, avoiding full list materialization
+        PagedResponse<ZipCode> response = zipCodeService.searchByFederalEntity(federalEntity, page, size);
         return ResponseEntity.ok(response);
     }
 
@@ -216,6 +216,7 @@ public class Controller {
             @Parameter(description = "Número de página (comienza en 0)")
             @RequestParam(value = "page", defaultValue = "0")
             @Min(value = 0, message = "La página debe ser mayor o igual a 0")
+            @Max(value = 10_000, message = "El número de página es inválido")
             int page,
 
             @Parameter(description = "Tamaño de página")
@@ -224,9 +225,8 @@ public class Controller {
             @Max(value = 100, message = "El tamaño máximo es 100")
             int size
     ) {
-        List<ZipCode> allResults = zipCodeService.searchByMunicipality(municipality);
-        PagedResponse<ZipCode> response = ZipCodeService.createPagedResponse(allResults, page, size);
-
+        // Service handles pagination internally, avoiding full list materialization
+        PagedResponse<ZipCode> response = zipCodeService.searchByMunicipality(municipality, page, size);
         return ResponseEntity.ok(response);
     }
 
@@ -537,6 +537,7 @@ public class Controller {
             @Parameter(description = "Número de página")
             @RequestParam(value = "page", defaultValue = "0")
             @Min(value = 0, message = "La página debe ser mayor o igual a 0")
+            @Max(value = 10_000, message = "El número de página es inválido")
             int page,
 
             @Parameter(description = "Tamaño de página")
@@ -561,6 +562,7 @@ public class Controller {
                 .build();
 
         List<ZipCode> allResults = zipCodeService.advancedSearch(request);
+        // Safe: page and size are validated by @Min/@Max, overflow handled by createPagedResponse
         PagedResponse<ZipCode> response = ZipCodeService.createPagedResponse(allResults, page, size);
 
         if (simplified) {

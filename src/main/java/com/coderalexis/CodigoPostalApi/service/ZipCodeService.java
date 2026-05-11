@@ -86,7 +86,8 @@ public class ZipCodeService {
         return zipCodesByCode.size();
     }
 
-    @Cacheable(value = "zipcodes", key = "#zipcode")
+    // No @Cacheable needed: ConcurrentHashMap.get() is already O(1).
+    // Caching would add serialization overhead without latency benefit.
     public ZipCode getZipCode(String zipcode) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
@@ -119,6 +120,14 @@ public class ZipCodeService {
     }
 
     private void buildPreComputedData() {
+        // Make all settlement lists immutable to prevent accidental mutation of internal state
+        for (ZipCode zc : zipCodesByCode.values()) {
+            if (zc.getSettlements() != null) {
+                zc.setSettlements(List.copyOf(zc.getSettlements()));
+            }
+        }
+        log.info("  - Listas de asentamientos convertidas a inmutables");
+
         // Pre-compute statistics once (data is immutable after load)
         long totalSettlements = zipCodesByCode.values().stream()
                 .mapToLong(zc -> zc.getSettlements().size())
@@ -351,6 +360,16 @@ public class ZipCodeService {
 
     @Cacheable(value = "federalEntitySearch", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#searchTerm)")
     public List<ZipCode> searchByFederalEntity(String searchTerm) {
+        // Delegates to paginated version with default page 0 and full size
+        return searchByFederalEntity(searchTerm, 0, Integer.MAX_VALUE).getContent();
+    }
+
+    /**
+     * Paginated search by federal entity.
+     * Uses skip/limit on the stream to avoid materializing the full list when pagination is applied.
+     */
+    @Cacheable(value = "federalEntitySearchPaged", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#searchTerm) + '_' + #page + '_' + #size")
+    public PagedResponse<ZipCode> searchByFederalEntity(String searchTerm, int page, int size) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
             metricsConfiguration.recordSearch("federal_entity");
@@ -362,7 +381,7 @@ public class ZipCodeService {
 
             String normalizedSearchTerm = Util.normalizeSearchTerm(searchTerm);
 
-            // Sequential stream - only ~32 entries in the entity index, parallelStream overhead not worth it
+            // Sequential stream - only ~32 entries in the entity index
             List<ZipCode> results = zipCodesByNormalizedEntity.entrySet().stream()
                     .filter(entry -> entry.getKey().contains(normalizedSearchTerm))
                     .flatMap(entry -> entry.getValue().stream())
@@ -376,7 +395,13 @@ public class ZipCodeService {
             }
 
             metricsConfiguration.recordResultSize("federal_entity", results.size());
-            return results;
+
+            // If no pagination requested (size == MAX_VALUE), return the full list directly
+            if (size == Integer.MAX_VALUE) {
+                return results;
+            }
+
+            return buildPagedResponse(results, page, size, "federal_entity");
         } finally {
             metricsConfiguration.recordSearchDuration(sample, "federal_entity");
         }
@@ -384,6 +409,16 @@ public class ZipCodeService {
 
     @Cacheable(value = "municipalitySearch", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#searchTerm)")
     public List<ZipCode> searchByMunicipality(String searchTerm) {
+        // Delegates to paginated version with default page 0 and full size
+        return searchByMunicipality(searchTerm, 0, Integer.MAX_VALUE).getContent();
+    }
+
+    /**
+     * Paginated search by municipality.
+     * Uses skip/limit on the stream to avoid materializing the full list when pagination is applied.
+     */
+    @Cacheable(value = "municipalitySearchPaged", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#searchTerm) + '_' + #page + '_' + #size")
+    public PagedResponse<ZipCode> searchByMunicipality(String searchTerm, int page, int size) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
             metricsConfiguration.recordSearch("municipality");
@@ -395,7 +430,7 @@ public class ZipCodeService {
 
             String normalizedSearchTerm = Util.normalizeSearchTerm(searchTerm);
 
-            // Sequential stream - municipality index has ~2500 entries, still fast enough sequentially
+            // Sequential stream - municipality index has ~2500 entries
             List<ZipCode> results = zipCodesByNormalizedMunicipality.entrySet().stream()
                     .filter(entry -> entry.getKey().contains(normalizedSearchTerm))
                     .flatMap(entry -> entry.getValue().stream())
@@ -409,7 +444,13 @@ public class ZipCodeService {
             }
 
             metricsConfiguration.recordResultSize("municipality", results.size());
-            return results;
+
+            // If no pagination requested (size == MAX_VALUE), return the full list directly
+            if (size == Integer.MAX_VALUE) {
+                return results;
+            }
+
+            return buildPagedResponse(results, page, size, "municipality");
         } finally {
             metricsConfiguration.recordSearchDuration(sample, "municipality");
         }
@@ -644,17 +685,35 @@ public class ZipCodeService {
 
     /**
      * Creates a paginated response from a list of results.
+     * Uses long arithmetic to prevent overflow when page * size exceeds Integer.MAX_VALUE.
      * 
      * @param allResults All results (already loaded in memory)
      * @param page Page number (0-based)
      * @param size Page size
      * @param <T> Result type
-     * @return PaginatedResponse with the sliced results
+     * @return PaginatedResponse with the sliced results (empty if page exceeds bounds)
      */
     public static <T> PagedResponse<T> createPagedResponse(List<T> allResults, int page, int size) {
         int totalElements = allResults.size();
-        int totalPages = (int) Math.ceil((double) totalElements / size);
-        int start = Math.min(page * size, totalElements);
+        
+        // Prevent overflow: use long arithmetic for the offset calculation
+        long offset = Math.multiplyExact((long) page, (long) size);
+        
+        // If offset exceeds total elements, return empty page
+        if (offset >= totalElements) {
+            int totalPages = totalElements > 0 ? (int) Math.ceil((double) totalElements / size) : 0;
+            return PagedResponse.<T>builder()
+                    .content(List.of())
+                    .pageNumber(page)
+                    .pageSize(size)
+                    .totalElements(totalElements)
+                    .totalPages(totalPages)
+                    .first(false)
+                    .last(true)
+                    .build();
+        }
+
+        int start = (int) offset; // Safe: offset < totalElements which is an int
         int end = Math.min(start + size, totalElements);
 
         List<T> pagedResults = (start < end && totalElements > 0) 
@@ -666,10 +725,18 @@ public class ZipCodeService {
                 .pageNumber(page)
                 .pageSize(size)
                 .totalElements(totalElements)
-                .totalPages(totalPages)
+                .totalPages((int) Math.ceil((double) totalElements / size))
                 .first(page == 0)
-                .last(page >= totalPages - 1)
+                .last(page >= ((int) Math.ceil((double) totalElements / size)) - 1)
                 .build();
+    }
+
+    /**
+     * Builds a paginated response from pre-computed results, recording metrics.
+     */
+    private <T> PagedResponse<T> buildPagedResponse(List<T> allResults, int page, int size, String searchType) {
+        metricsConfiguration.recordResultSize(searchType, allResults.size());
+        return createPagedResponse(allResults, page, size);
     }
 
     /**
