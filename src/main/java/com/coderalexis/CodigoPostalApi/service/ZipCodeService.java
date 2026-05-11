@@ -451,8 +451,8 @@ public class ZipCodeService {
             int effectiveLimit = Math.min(Math.max(limit, 1), 50);
 
             // O(log n + k) using sorted map range query.
-            // The exclusive upper bound is the next lexicographic prefix, so a search
-            // like "0199" only scans ["0199", "0200") and never leaks "020xx" rows.
+            // The exclusive upper bound stays inside the requested prefix, so a search
+            // like "0199" never leaks "020xx" rows.
             String fromKey = cleanCode;
             String toKey = computeUpperBound(cleanCode);
 
@@ -478,27 +478,13 @@ public class ZipCodeService {
     /**
      * Computes the exclusive upper bound for prefix-based range queries.
      *
-     * For prefix "019", returns "020" so subMap("019", true, "020", false)
-     * includes all keys starting with "019" but excludes those starting with "020".
-     *
-     * Handles carry by truncating the suffix after the incremented digit:
-     * - "019" -> "020"
-     * - "0199" -> "0200"
-     * - "999" -> ":" (the next ASCII character after '9')
+     * Appending the maximum Unicode character creates a key that is greater than
+     * every digit-only zip code that starts with the requested prefix, without
+     * including the next numeric range. For example, range ["0199", "0199\uFFFF")
+     * includes "01990" through "01999" but excludes "02000".
      */
     private String computeUpperBound(String prefix) {
-        char[] chars = prefix.toCharArray();
-
-        for (int i = chars.length - 1; i >= 0; i--) {
-            if (chars[i] != '9') {
-                chars[i]++;
-                return new String(chars, 0, i + 1);
-            }
-        }
-
-        // All-9 prefixes have no larger numeric prefix; ':' is the next ASCII
-        // character after '9', making it a safe exclusive upper bound for digit keys.
-        return ":";
+        return prefix + Character.MAX_VALUE;
     }
 
     /**
