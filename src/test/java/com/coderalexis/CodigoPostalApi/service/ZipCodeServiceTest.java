@@ -2,6 +2,7 @@ package com.coderalexis.CodigoPostalApi.service;
 
 import com.coderalexis.CodigoPostalApi.exceptions.ZipCodeNotFoundException;
 import com.coderalexis.CodigoPostalApi.model.AdvancedSearchRequest;
+import com.coderalexis.CodigoPostalApi.model.PagedResponse;
 import com.coderalexis.CodigoPostalApi.model.ZipCode;
 import com.coderalexis.CodigoPostalApi.model.ZipCodeStats;
 import org.junit.jupiter.api.Test;
@@ -158,6 +159,40 @@ class ZipCodeServiceTest {
         assertThrows(IllegalArgumentException.class, () -> {
             zipCodeService.searchByMunicipality("");
         }, "Debe lanzar IllegalArgumentException para término vacío");
+    }
+
+    @Test
+    @DisplayName("Debe paginar búsqueda por entidad federativa sin perder metadatos")
+    void shouldPaginateFederalEntitySearch() {
+        List<ZipCode> allResults = zipCodeService.searchByFederalEntity("Ciudad de México");
+        PagedResponse<ZipCode> firstPage = zipCodeService.searchByFederalEntity("Ciudad de México", 0, 5);
+
+        assertNotNull(firstPage);
+        assertEquals(0, firstPage.getPageNumber());
+        assertEquals(5, firstPage.getPageSize());
+        assertEquals(allResults.size(), firstPage.getTotalElements());
+        assertEquals(Math.min(5, allResults.size()), firstPage.getContent().size());
+        assertTrue(firstPage.isFirst());
+    }
+
+    @Test
+    @DisplayName("Debe devolver página vacía cuando la página solicitada excede resultados")
+    void shouldReturnEmptyPageWhenPageExceedsResults() {
+        PagedResponse<ZipCode> response = zipCodeService.searchByMunicipality("Guadalajara", 10_000, 100);
+
+        assertNotNull(response);
+        assertTrue(response.getContent().isEmpty(), "Una página fuera de rango debe regresar contenido vacío");
+        assertTrue(response.isLast(), "Una página fuera de rango debe considerarse la última");
+        assertTrue(response.getTotalElements() > 0, "Debe conservar el total real de elementos");
+    }
+
+    @Test
+    @DisplayName("Debe validar paginación inválida en el servicio")
+    void shouldRejectInvalidServicePagination() {
+        assertThrows(IllegalArgumentException.class,
+                () -> zipCodeService.searchByFederalEntity("Jalisco", -1, 10));
+        assertThrows(IllegalArgumentException.class,
+                () -> zipCodeService.searchByMunicipality("Guadalajara", 0, 0));
     }
 
     @Test
