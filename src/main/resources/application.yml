@@ -8,6 +8,17 @@ spring:
       enabled: true
   jackson:
     default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: true
+      indent-output: false
+      fail-on-empty-beans: false
+    deserialization:
+      fail-on-unknown-properties: false
+    generator:
+      write-numbers-as-strings: false
+    mapper:
+      accept-case-insensitive-enums: true
+    time-zone: America/Mexico_City
 
 zipcode:
   file:
@@ -26,7 +37,7 @@ server:
       max: 200
       min-spare: 20
     max-connections: 10000
-    accept-count: 100
+    accept-count: 300
 
 springdoc:
   swagger-ui:
