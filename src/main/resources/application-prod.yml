@@ -8,6 +8,11 @@ spring:
   config:
     activate:
       on-profile: prod
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+  cache:
+    caffeine:
+      spec: maximumSize=10000,expireAfterAccess=1h,recordStats
 
 # Rate limiting estricto en producción
 ratelimit:
@@ -44,8 +49,8 @@ logging:
     max-size: 10MB
     max-history: 30
 
-# Servidor con errores ocultos
 server:
+  # Servidor con errores ocultos
   error:
     include-message: never  # NUNCA incluir mensajes de error internos
     include-stacktrace: never
@@ -53,23 +58,10 @@ server:
     include-binding-errors: never
     whitelabel:
       enabled: false  # Deshabilitar página de error por defecto
-
-# Compresión optimizada
-server:
+  # Compresión optimizada
   compression:
     enabled: true
     mime-types: application/json,application/xml,text/html,text/xml,text/plain
     min-response-size: 512  # Comprimir respuestas > 512 bytes
-
-# Seguridad adicional
-server:
+  # Seguridad adicional
   shutdown: graceful  # Apagado graceful
-spring:
-  lifecycle:
-    timeout-per-shutdown-phase: 30s
-
-# Caché optimizado para producción
-spring:
-  cache:
-    caffeine:
-      spec: maximumSize=10000,expireAfterAccess=1h,recordStats
