@@ -275,4 +275,37 @@ class ZipCodeServiceTest {
         assertEquals(firstPage.normalizedFilterCacheKey(), secondPageSimplified.normalizedFilterCacheKey(),
             "La cache de busqueda avanzada debe depender solo de los filtros normalizados");
     }
+
+    @Test
+    @DisplayName("Debe paginar búsqueda avanzada sin materializar desde el controlador")
+    void shouldPaginateAdvancedSearchInService() {
+        AdvancedSearchRequest request = AdvancedSearchRequest.builder()
+                .federalEntity("Jalisco")
+                .municipality("Guadalajara")
+                .zoneType("Urbano")
+                .build();
+
+        List<ZipCode> allResults = zipCodeService.advancedSearch(request);
+        PagedResponse<ZipCode> firstPage = zipCodeService.advancedSearch(request, 0, 5);
+
+        assertNotNull(firstPage);
+        assertEquals(0, firstPage.getPageNumber());
+        assertEquals(5, firstPage.getPageSize());
+        assertEquals(allResults.size(), firstPage.getTotalElements());
+        assertEquals(Math.min(5, allResults.size()), firstPage.getContent().size());
+        assertTrue(firstPage.getContent().stream()
+                .allMatch(zipCode -> zipCode.getZipCode().compareTo("00000") >= 0));
+    }
+
+    @Test
+    @DisplayName("Debe validar paginación inválida en búsqueda avanzada paginada")
+    void shouldRejectInvalidAdvancedSearchPagination() {
+        AdvancedSearchRequest request = AdvancedSearchRequest.builder()
+                .federalEntity("Jalisco")
+                .build();
+
+        assertThrows(IllegalArgumentException.class, () -> zipCodeService.advancedSearch(request, -1, 10));
+        assertThrows(IllegalArgumentException.class, () -> zipCodeService.advancedSearch(request, 0, 0));
+    }
+
 }

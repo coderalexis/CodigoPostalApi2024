@@ -80,8 +80,11 @@ logs/
 *.old
 *.swp
 
-# Dependencias descargadas localmente (opcional si usas un repositorio central como Maven Central)
-.mvn/
+# Dependencias descargadas localmente; conservar configuración del Maven Wrapper
+.mvn/*
+!.mvn/wrapper/
+!.mvn/wrapper/maven-wrapper.properties
+!.mvn/wrapper/maven-wrapper.jar
 
 # Archivos de configuraciones de editor
 .vscode/
