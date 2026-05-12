@@ -365,9 +365,9 @@ public class ZipCodeService {
             metricsConfiguration.recordSearch("federal_entity");
             String normalizedSearchTerm = validateSearchTerm(searchTerm, "federal_entity");
 
-            List<ZipCode> results = zipCodesSorted.values().stream()
-                    .filter(zipCode -> zipCode.getNormalizedFederalEntity().contains(normalizedSearchTerm))
-                    .collect(Collectors.toList());
+            List<ZipCode> results = findOrderedCandidatesInIndex(
+                    zipCodesByNormalizedEntity,
+                    normalizedSearchTerm);
 
             if (results.isEmpty()) {
                 metricsConfiguration.recordSearchError("federal_entity", "not_found");
@@ -395,11 +395,10 @@ public class ZipCodeService {
             validatePagination(page, size);
             String normalizedSearchTerm = validateSearchTerm(searchTerm, "federal_entity");
 
-            PagedResponse<ZipCode> response = createPagedResponse(
-                    zipCodesSorted.values(),
-                    zipCode -> zipCode.getNormalizedFederalEntity().contains(normalizedSearchTerm),
-                    page,
-                    size);
+            List<ZipCode> candidates = findOrderedCandidatesInIndex(
+                    zipCodesByNormalizedEntity,
+                    normalizedSearchTerm);
+            PagedResponse<ZipCode> response = createPagedResponse(candidates, page, size);
 
             if (response.getTotalElements() == 0) {
                 metricsConfiguration.recordSearchError("federal_entity", "not_found");
@@ -422,9 +421,9 @@ public class ZipCodeService {
             metricsConfiguration.recordSearch("municipality");
             String normalizedSearchTerm = validateSearchTerm(searchTerm, "municipality");
 
-            List<ZipCode> results = zipCodesSorted.values().stream()
-                    .filter(zipCode -> zipCode.getNormalizedMunicipality().contains(normalizedSearchTerm))
-                    .collect(Collectors.toList());
+            List<ZipCode> results = findOrderedCandidatesInIndex(
+                    zipCodesByNormalizedMunicipality,
+                    normalizedSearchTerm);
 
             if (results.isEmpty()) {
                 metricsConfiguration.recordSearchError("municipality", "not_found");
@@ -452,11 +451,10 @@ public class ZipCodeService {
             validatePagination(page, size);
             String normalizedSearchTerm = validateSearchTerm(searchTerm, "municipality");
 
-            PagedResponse<ZipCode> response = createPagedResponse(
-                    zipCodesSorted.values(),
-                    zipCode -> zipCode.getNormalizedMunicipality().contains(normalizedSearchTerm),
-                    page,
-                    size);
+            List<ZipCode> candidates = findOrderedCandidatesInIndex(
+                    zipCodesByNormalizedMunicipality,
+                    normalizedSearchTerm);
+            PagedResponse<ZipCode> response = createPagedResponse(candidates, page, size);
 
             if (response.getTotalElements() == 0) {
                 metricsConfiguration.recordSearchError("municipality", "not_found");
@@ -889,6 +887,20 @@ public class ZipCodeService {
 
         // Fallback: full scan in deterministic zip-code order only when filtering by settlement/type/zone.
         return zipCodesSorted.values();
+    }
+
+    /**
+     * Finds matching zip codes through a normalized inverted index and returns
+     * them in deterministic zip-code order. This limits entity/municipality
+     * searches to the small index key set instead of scanning the full catalog.
+     */
+    private List<ZipCode> findOrderedCandidatesInIndex(Map<String, Set<ZipCode>> index, String normalizedSearchTerm) {
+        return index.entrySet().stream()
+                .filter(entry -> entry.getKey().contains(normalizedSearchTerm))
+                .flatMap(entry -> entry.getValue().stream())
+                .distinct()
+                .sorted(Comparator.comparing(ZipCode::getZipCode))
+                .toList();
     }
 
     private Set<ZipCode> findCandidatesInIndex(Map<String, Set<ZipCode>> index, String normalizedSearchTerm) {
