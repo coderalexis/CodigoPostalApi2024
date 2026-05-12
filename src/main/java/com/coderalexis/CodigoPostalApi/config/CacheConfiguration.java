@@ -7,7 +7,6 @@ import org.springframework.cache.caffeine.CaffeineCacheManager;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.Arrays;
 import java.util.concurrent.TimeUnit;
 
 @Configuration
@@ -25,10 +24,11 @@ public class CacheConfiguration {
                 "partialSearch",
                 "federalEntities",
                 "municipalitiesByEntity",
-                "advancedSearch"
+                "advancedSearch",
+                "advancedSearchPaged"
         );
 
-        // Direct zip code lookup: O(1) ConcurrentHashMap access, no cache benefit.
+        // Direct zip code lookup: O(1) in-memory Map access, no cache benefit.
         // Kept for backward compatibility with @Cacheable annotations.
         cacheManager.registerCustomCache("zipcodes",
                 Caffeine.newBuilder()
@@ -99,7 +99,16 @@ public class CacheConfiguration {
         // full ZipCode objects (which include nested settlement lists).
         cacheManager.registerCustomCache("advancedSearch",
                 Caffeine.newBuilder()
-                        .maximumSize(50)
+                        .maximumSize(25)
+                        .expireAfterWrite(5, TimeUnit.MINUTES)
+                        .recordStats()
+                        .build());
+
+        // Paginated advanced search: smaller values than unpaged results, with
+        // page-aware keys to reduce repeated filtering for common queries.
+        cacheManager.registerCustomCache("advancedSearchPaged",
+                Caffeine.newBuilder()
+                        .maximumSize(100)
                         .expireAfterWrite(5, TimeUnit.MINUTES)
                         .recordStats()
                         .build());

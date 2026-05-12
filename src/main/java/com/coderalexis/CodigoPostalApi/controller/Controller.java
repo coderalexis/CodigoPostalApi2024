@@ -561,9 +561,7 @@ public class Controller {
                 .simplified(simplified)
                 .build();
 
-        List<ZipCode> allResults = zipCodeService.advancedSearch(request);
-        // Safe: page and size are validated by @Min/@Max, overflow handled by createPagedResponse
-        PagedResponse<ZipCode> response = ZipCodeService.createPagedResponse(allResults, page, size);
+        PagedResponse<ZipCode> response = zipCodeService.advancedSearch(request, page, size);
 
         if (simplified) {
             List<ZipCodeSimplified> simplifiedResults = response.getContent().stream()

@@ -11,6 +11,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
+import java.math.BigInteger;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
@@ -108,17 +111,49 @@ public class RateLimitInterceptor implements HandlerInterceptor {
         return false;
     }
 
-    private boolean ipMatchesCIDR(String ip, String cidr) {
+    boolean ipMatchesCIDR(String ip, String cidr) {
         try {
             String[] parts = cidr.split("/");
-            String network = parts[0];
-            if (ip.startsWith(network.substring(0, network.lastIndexOf('.')))) {
-                return true;
+            if (parts.length != 2) {
+                log.warn("CIDR invalido en whitelist: {}", cidr);
+                return false;
             }
-        } catch (Exception e) {
-            log.error("Error verificando CIDR: {}", cidr, e);
+
+            InetAddress ipAddress = InetAddress.getByName(ip);
+            InetAddress networkAddress = InetAddress.getByName(parts[0]);
+
+            byte[] ipBytes = ipAddress.getAddress();
+            byte[] networkBytes = networkAddress.getAddress();
+            if (ipBytes.length != networkBytes.length) {
+                return false;
+            }
+
+            int prefixLength = Integer.parseInt(parts[1]);
+            int maxPrefixLength = ipBytes.length * Byte.SIZE;
+            if (prefixLength < 0 || prefixLength > maxPrefixLength) {
+                log.warn("Mascara CIDR invalida en whitelist: {}", cidr);
+                return false;
+            }
+
+            BigInteger ipValue = new BigInteger(1, ipBytes);
+            BigInteger networkValue = new BigInteger(1, networkBytes);
+            BigInteger mask = cidrMask(prefixLength, maxPrefixLength);
+
+            return ipValue.and(mask).equals(networkValue.and(mask));
+        } catch (NumberFormatException | UnknownHostException e) {
+            log.warn("Error verificando CIDR {}: {}", cidr, e.getMessage());
+            return false;
+        }
+    }
+
+    private BigInteger cidrMask(int prefixLength, int totalBits) {
+        if (prefixLength == 0) {
+            return BigInteger.ZERO;
         }
 
-        return false;
+        return BigInteger.ONE
+                .shiftLeft(prefixLength)
+                .subtract(BigInteger.ONE)
+                .shiftLeft(totalBits - prefixLength);
     }
 }

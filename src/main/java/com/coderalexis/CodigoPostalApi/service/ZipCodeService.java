@@ -22,8 +22,6 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.Collection;
@@ -52,13 +50,14 @@ public class ZipCodeService {
     // Pre-compiled pattern for validating digit-only input (avoids recompiling on every partial search)
     private static final Pattern DIGITS_PATTERN = Pattern.compile("^\\d+$");
 
-    // Thread-safe maps for concurrent access
-    private final Map<String, ZipCode> zipCodesByCode = new ConcurrentHashMap<>();
+    // Data is loaded once at startup and then treated as read-only. Non-concurrent
+    // collections avoid unnecessary synchronization overhead on the hot read path.
+    private final Map<String, ZipCode> zipCodesByCode = new HashMap<>();
     // Sorted map for O(log n) prefix searches instead of O(n) full scan
-    private final ConcurrentSkipListMap<String, ZipCode> zipCodesSorted = new ConcurrentSkipListMap<>();
+    private final NavigableMap<String, ZipCode> zipCodesSorted = new TreeMap<>();
     // Inverted indices for fast searches by entity and municipality
-    private final Map<String, Set<ZipCode>> zipCodesByNormalizedEntity = new ConcurrentHashMap<>();
-    private final Map<String, Set<ZipCode>> zipCodesByNormalizedMunicipality = new ConcurrentHashMap<>();
+    private final Map<String, Set<ZipCode>> zipCodesByNormalizedEntity = new HashMap<>();
+    private final Map<String, Set<ZipCode>> zipCodesByNormalizedMunicipality = new HashMap<>();
 
     // Pre-computed statistics (immutable after load)
     private volatile ZipCodeStats cachedStats;
@@ -87,7 +86,7 @@ public class ZipCodeService {
         return zipCodesByCode.size();
     }
 
-    // No @Cacheable needed: ConcurrentHashMap.get() is already O(1).
+    // No @Cacheable needed: Map.get() is already O(1).
     // Caching would add serialization overhead without latency benefit.
     public ZipCode getZipCode(String zipcode) {
         Timer.Sample sample = metricsConfiguration.startTimer();
@@ -329,11 +328,11 @@ public class ZipCodeService {
             zipCode.getSettlements().add(settlement);
 
             zipCodesByNormalizedEntity
-                    .computeIfAbsent(normalizedEntity, k -> ConcurrentHashMap.newKeySet())
+                    .computeIfAbsent(normalizedEntity, k -> new HashSet<>())
                     .add(zipCode);
 
             zipCodesByNormalizedMunicipality
-                    .computeIfAbsent(normalizedMunicipality, k -> ConcurrentHashMap.newKeySet())
+                    .computeIfAbsent(normalizedMunicipality, k -> new HashSet<>())
                     .add(zipCode);
 
             return true;
@@ -600,92 +599,16 @@ public class ZipCodeService {
      * Advanced search using inverted indices as starting point when possible.
      * Uses pre-computed normalized fields to avoid runtime normalization.
      */
-    @Cacheable(value = "advancedSearch", key = "#request.normalizedFilterCacheKey()")
+    @Cacheable(value = "advancedSearch", key = "#request == null ? 'null' : #request.normalizedFilterCacheKey()")
     public List<ZipCode> advancedSearch(AdvancedSearchRequest request) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
-            if ((request.getFederalEntity() == null || request.getFederalEntity().isBlank()) &&
-                (request.getMunicipality() == null || request.getMunicipality().isBlank()) &&
-                (request.getSettlement() == null || request.getSettlement().isBlank()) &&
-                (request.getSettlementType() == null || request.getSettlementType().isBlank()) &&
-                (request.getZoneType() == null || request.getZoneType().isBlank())) {
-                throw new IllegalArgumentException("Debe proporcionar al menos un criterio de busqueda");
-            }
-
-            String normalizedEntity = request.getFederalEntity() != null ?
-                    Util.normalizeSearchTerm(request.getFederalEntity()) : null;
-            String normalizedMunicipality = request.getMunicipality() != null ?
-                    Util.normalizeSearchTerm(request.getMunicipality()) : null;
-            String normalizedSettlement = request.getSettlement() != null ?
-                    Util.normalizeSearchTerm(request.getSettlement()) : null;
-            String normalizedSettlementType = request.getSettlementType() != null ?
-                    Util.normalizeSearchTerm(request.getSettlementType()) : null;
-            String normalizedZoneType = request.getZoneType() != null ?
-                    Util.normalizeSearchTerm(request.getZoneType()) : null;
-
-            // Use inverted indices as starting point to reduce scan scope
-            Collection<ZipCode> candidates = resolveSearchCandidates(normalizedEntity, normalizedMunicipality);
+            AdvancedSearchCriteria criteria = validateAndNormalizeAdvancedSearchRequest(request);
+            Collection<ZipCode> candidates = resolveOrderedSearchCandidates(criteria);
+            Predicate<ZipCode> filter = zipCode -> matchesAdvancedCriteria(zipCode, criteria);
 
             List<ZipCode> results = candidates.stream()
-                    .filter(zipCode -> {
-                        // Filter by entity using pre-computed normalized field
-                        if (normalizedEntity != null && !normalizedEntity.isEmpty()) {
-                            if (!zipCode.getNormalizedFederalEntity().contains(normalizedEntity)) {
-                                return false;
-                            }
-                        }
-
-                        // Filter by municipality using pre-computed normalized field
-                        if (normalizedMunicipality != null && !normalizedMunicipality.isEmpty()) {
-                            if (!zipCode.getNormalizedMunicipality().contains(normalizedMunicipality)) {
-                                return false;
-                            }
-                        }
-
-                        // Filter by settlement fields using pre-computed normalized fields
-                        if ((normalizedSettlement != null && !normalizedSettlement.isEmpty()) ||
-                            (normalizedSettlementType != null && !normalizedSettlementType.isEmpty()) ||
-                            (normalizedZoneType != null && !normalizedZoneType.isEmpty())) {
-
-                            boolean hasMatchingSettlement = zipCode.getSettlements().stream()
-                                    .anyMatch(settlement -> {
-                                        boolean matches = true;
-
-                                        if (normalizedSettlement != null && !normalizedSettlement.isEmpty()) {
-                                            // Use pre-computed normalized field instead of runtime normalization
-                                            String settlementName = settlement.getNormalizedName() != null 
-                                                    ? settlement.getNormalizedName() 
-                                                    : Util.normalizeString(settlement.getName());
-                                            matches = settlementName.contains(normalizedSettlement);
-                                        }
-
-                                        if (matches && normalizedSettlementType != null && !normalizedSettlementType.isEmpty()) {
-                                            // Use pre-computed normalized field instead of runtime normalization
-                                            String type = settlement.getNormalizedSettlementType() != null 
-                                                    ? settlement.getNormalizedSettlementType() 
-                                                    : Util.normalizeString(settlement.getSettlementType());
-                                            matches = type.contains(normalizedSettlementType);
-                                        }
-
-                                        if (matches && normalizedZoneType != null && !normalizedZoneType.isEmpty()) {
-                                            // Use pre-computed normalized field instead of runtime normalization
-                                            String zone = settlement.getNormalizedZoneType() != null 
-                                                    ? settlement.getNormalizedZoneType() 
-                                                    : Util.normalizeString(settlement.getZoneType());
-                                            matches = zone.contains(normalizedZoneType);
-                                        }
-
-                                        return matches;
-                                    });
-
-                            if (!hasMatchingSettlement) {
-                                return false;
-                            }
-                        }
-
-                        return true;
-                    })
-                    .sorted(Comparator.comparing(ZipCode::getZipCode))
+                    .filter(filter)
                     .collect(Collectors.toList());
 
             if (results.isEmpty()) {
@@ -698,6 +621,136 @@ public class ZipCodeService {
         } finally {
             metricsConfiguration.recordSearchDuration(sample, "advanced");
         }
+    }
+
+    /**
+     * Paginated advanced search that materializes only the requested page.
+     * This keeps broad advanced searches from allocating all matching ZipCode
+     * objects when clients only need one page.
+     */
+    @Cacheable(value = "advancedSearchPaged", key = "#request == null ? 'null_' + #page + '_' + #size : #request.normalizedFilterCacheKey() + '_' + #page + '_' + #size")
+    public PagedResponse<ZipCode> advancedSearch(AdvancedSearchRequest request, int page, int size) {
+        Timer.Sample sample = metricsConfiguration.startTimer();
+        try {
+            validatePagination(page, size);
+            AdvancedSearchCriteria criteria = validateAndNormalizeAdvancedSearchRequest(request);
+            Collection<ZipCode> candidates = resolveOrderedSearchCandidates(criteria);
+
+            PagedResponse<ZipCode> response = createPagedResponse(
+                    candidates,
+                    zipCode -> matchesAdvancedCriteria(zipCode, criteria),
+                    page,
+                    size);
+
+            if (response.getTotalElements() == 0) {
+                metricsConfiguration.recordSearchError("advanced", "not_found");
+                throw new ZipCodeNotFoundException("No se encontraron codigos postales con los criterios especificados");
+            }
+
+            metricsConfiguration.recordResultSize("advanced", (int) response.getTotalElements());
+            return response;
+        } finally {
+            metricsConfiguration.recordSearchDuration(sample, "advanced");
+        }
+    }
+
+    private AdvancedSearchCriteria validateAndNormalizeAdvancedSearchRequest(AdvancedSearchRequest request) {
+        if (request == null) {
+            metricsConfiguration.recordSearchError("advanced", "empty_search");
+            throw new IllegalArgumentException("Debe proporcionar al menos un criterio de busqueda");
+        }
+
+        if ((request.getFederalEntity() == null || request.getFederalEntity().isBlank()) &&
+            (request.getMunicipality() == null || request.getMunicipality().isBlank()) &&
+            (request.getSettlement() == null || request.getSettlement().isBlank()) &&
+            (request.getSettlementType() == null || request.getSettlementType().isBlank()) &&
+            (request.getZoneType() == null || request.getZoneType().isBlank())) {
+            metricsConfiguration.recordSearchError("advanced", "empty_search");
+            throw new IllegalArgumentException("Debe proporcionar al menos un criterio de busqueda");
+        }
+
+        return new AdvancedSearchCriteria(
+                request.getFederalEntity() != null ? Util.normalizeSearchTerm(request.getFederalEntity()) : null,
+                request.getMunicipality() != null ? Util.normalizeSearchTerm(request.getMunicipality()) : null,
+                request.getSettlement() != null ? Util.normalizeSearchTerm(request.getSettlement()) : null,
+                request.getSettlementType() != null ? Util.normalizeSearchTerm(request.getSettlementType()) : null,
+                request.getZoneType() != null ? Util.normalizeSearchTerm(request.getZoneType()) : null);
+    }
+
+    private Collection<ZipCode> resolveOrderedSearchCandidates(AdvancedSearchCriteria criteria) {
+        Collection<ZipCode> candidates = resolveSearchCandidates(
+                criteria.normalizedEntity(),
+                criteria.normalizedMunicipality());
+
+        if (candidates.isEmpty()) {
+            return List.of();
+        }
+
+        if (candidates instanceof Set<?>) {
+            return candidates.stream()
+                    .sorted(Comparator.comparing(ZipCode::getZipCode))
+                    .toList();
+        }
+
+        return candidates;
+    }
+
+    private boolean matchesAdvancedCriteria(ZipCode zipCode, AdvancedSearchCriteria criteria) {
+        if (isFilterPresent(criteria.normalizedEntity()) &&
+                !zipCode.getNormalizedFederalEntity().contains(criteria.normalizedEntity())) {
+            return false;
+        }
+
+        if (isFilterPresent(criteria.normalizedMunicipality()) &&
+                !zipCode.getNormalizedMunicipality().contains(criteria.normalizedMunicipality())) {
+            return false;
+        }
+
+        if (isFilterPresent(criteria.normalizedSettlement()) ||
+            isFilterPresent(criteria.normalizedSettlementType()) ||
+            isFilterPresent(criteria.normalizedZoneType())) {
+            return zipCode.getSettlements().stream()
+                    .anyMatch(settlement -> matchesSettlementCriteria(settlement, criteria));
+        }
+
+        return true;
+    }
+
+    private boolean matchesSettlementCriteria(Settlements settlement, AdvancedSearchCriteria criteria) {
+        if (isFilterPresent(criteria.normalizedSettlement())) {
+            String settlementName = settlement.getNormalizedName() != null
+                    ? settlement.getNormalizedName()
+                    : Util.normalizeString(settlement.getName());
+            if (!settlementName.contains(criteria.normalizedSettlement())) {
+                return false;
+            }
+        }
+
+        if (isFilterPresent(criteria.normalizedSettlementType())) {
+            String type = settlement.getNormalizedSettlementType() != null
+                    ? settlement.getNormalizedSettlementType()
+                    : Util.normalizeString(settlement.getSettlementType());
+            if (!type.contains(criteria.normalizedSettlementType())) {
+                return false;
+            }
+        }
+
+        if (isFilterPresent(criteria.normalizedZoneType())) {
+            String zone = settlement.getNormalizedZoneType() != null
+                    ? settlement.getNormalizedZoneType()
+                    : Util.normalizeString(settlement.getZoneType());
+            return zone.contains(criteria.normalizedZoneType());
+        }
+
+        return true;
+    }
+
+    private record AdvancedSearchCriteria(
+            String normalizedEntity,
+            String normalizedMunicipality,
+            String normalizedSettlement,
+            String normalizedSettlementType,
+            String normalizedZoneType) {
     }
 
     /**
@@ -834,8 +887,8 @@ public class ZipCodeService {
             return municipalityCandidates;
         }
 
-        // Fallback: full scan only when filtering by settlement/type/zone.
-        return zipCodesByCode.values();
+        // Fallback: full scan in deterministic zip-code order only when filtering by settlement/type/zone.
+        return zipCodesSorted.values();
     }
 
     private Set<ZipCode> findCandidatesInIndex(Map<String, Set<ZipCode>> index, String normalizedSearchTerm) {
