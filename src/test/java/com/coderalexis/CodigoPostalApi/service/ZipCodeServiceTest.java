@@ -254,25 +254,19 @@ class ZipCodeServiceTest {
     @Test
     @DisplayName("Debe usar la misma llave de cache avanzada para distintas paginas y formatos")
     void shouldUseSameAdvancedSearchCacheKeyForPaginationAndFormatOptions() {
-        AdvancedSearchRequest firstPage = AdvancedSearchRequest.builder()
+        AdvancedSearchRequest mixedCase = AdvancedSearchRequest.builder()
                 .federalEntity(" Jalisco ")
                 .municipality("Guadalajara")
                 .zoneType("Urbano")
-                .page(0)
-                .size(20)
-                .simplified(false)
                 .build();
 
-        AdvancedSearchRequest secondPageSimplified = AdvancedSearchRequest.builder()
+        AdvancedSearchRequest lowercase = AdvancedSearchRequest.builder()
                 .federalEntity("jalisco")
                 .municipality("guadalajara")
                 .zoneType("urbano")
-                .page(3)
-                .size(5)
-                .simplified(true)
                 .build();
 
-        assertEquals(firstPage.normalizedFilterCacheKey(), secondPageSimplified.normalizedFilterCacheKey(),
+        assertEquals(mixedCase.normalizedFilterCacheKey(), lowercase.normalizedFilterCacheKey(),
             "La cache de busqueda avanzada debe depender solo de los filtros normalizados");
     }
 

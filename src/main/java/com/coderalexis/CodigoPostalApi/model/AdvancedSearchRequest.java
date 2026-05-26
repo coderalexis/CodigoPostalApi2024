@@ -3,15 +3,17 @@ package com.coderalexis.CodigoPostalApi.model;
 import com.coderalexis.CodigoPostalApi.util.Util;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.validation.constraints.Max;
-import jakarta.validation.constraints.Min;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
 /**
- * Request para búsqueda avanzada con múltiples filtros.
+ * DTO con los filtros lógicos de la búsqueda avanzada. Sólo contiene los
+ * criterios de filtrado; la paginación y el formato de respuesta se reciben
+ * como parámetros separados del controlador para evitar duplicar
+ * representaciones y reducir el riesgo de discrepancia entre el query string
+ * y el cuerpo del request.
  */
 @Data
 @Builder
@@ -38,25 +40,10 @@ public class AdvancedSearchRequest {
     @JsonProperty("zone_type")
     private String zoneType;
 
-    @Schema(description = "Número de página (comienza en 0)", example = "0")
-    @Min(value = 0, message = "La página debe ser mayor o igual a 0")
-    @Builder.Default
-    private int page = 0;
-
-    @Schema(description = "Tamaño de página", example = "20")
-    @Min(value = 1, message = "El tamaño debe ser mayor a 0")
-    @Max(value = 100, message = "El tamaño máximo es 100")
-    @Builder.Default
-    private int size = 20;
-
-    @Schema(description = "Si es true, devuelve formato simplificado sin lista de asentamientos", example = "false")
-    @Builder.Default
-    private boolean simplified = false;
-
     /**
-     * Stable cache key for the expensive, unpaged advanced-search result set.
-     * Page, size, and simplified are intentionally excluded because pagination
-     * and presentation mapping are applied after retrieving the full result list.
+     * Cache key estable basada exclusivamente en los filtros normalizados.
+     * Por diseño no incluye paginación ni formato porque ambos se aplican a
+     * posteriori sobre el conjunto de resultados.
      */
     public String normalizedFilterCacheKey() {
         return String.join("|",
@@ -65,5 +52,23 @@ public class AdvancedSearchRequest {
                 Util.normalizeCacheKey(settlement),
                 Util.normalizeCacheKey(settlementType),
                 Util.normalizeCacheKey(zoneType));
+    }
+
+    /**
+     * Indica si el request tiene al menos un filtro útil. Usado por las
+     * condiciones SpEL de {@code @Cacheable} para evitar entrar al cache con
+     * requests inválidos que de todas formas terminarán en
+     * IllegalArgumentException (#19).
+     */
+    public boolean hasAnyFilter() {
+        return notBlank(federalEntity)
+                || notBlank(municipality)
+                || notBlank(settlement)
+                || notBlank(settlementType)
+                || notBlank(zoneType);
+    }
+
+    private static boolean notBlank(String s) {
+        return s != null && !s.isBlank();
     }
 }
