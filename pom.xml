@@ -26,9 +26,13 @@
 		<tag/>
 		<url/>
 	</scm>
+	<!--
+		Fix #21: removida la propiedad <lombok.version>. Spring Boot 4.0.6 ya
+		gestiona la versión de Lombok desde su BOM y sobrescribirla podía
+		causar incompatibilidades sutiles con el annotation processor.
+	-->
 	<properties>
 		<java.version>25</java.version>
-		<lombok.version>1.18.40</lombok.version>
 		<springdoc.version>3.0.1</springdoc.version>
 		<bucket4j.version>8.10.1</bucket4j.version>
 	</properties>
@@ -70,11 +74,10 @@
 			<version>${bucket4j.version}</version>
 		</dependency>
 
-		<!-- Lombok -->
+		<!-- Lombok (versión gestionada por el BOM de Spring Boot) -->
 		<dependency>
 			<groupId>org.projectlombok</groupId>
 			<artifactId>lombok</artifactId>
-			<version>${lombok.version}</version>
 			<scope>provided</scope>
 		</dependency>
 
@@ -121,7 +124,6 @@
 						<path>
 							<groupId>org.projectlombok</groupId>
 							<artifactId>lombok</artifactId>
-							<version>${lombok.version}</version>
 						</path>
 					</annotationProcessorPaths>
 				</configuration>
