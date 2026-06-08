@@ -10,9 +10,10 @@ spring:
       on-profile: prod
   lifecycle:
     timeout-per-shutdown-phase: 30s
-  cache:
-    caffeine:
-      spec: maximumSize=10000,expireAfterAccess=1h,recordStats
+  # NOTA: la configuración real de cada cache se hace de forma programática en
+  # CacheConfiguration#cacheManager (Caffeine.newBuilder per región). El
+  # antiguo `spring.cache.caffeine.spec` global se ignora cuando hay registros
+  # personalizados y solo confunde.
 
 # Rate limiting estricto en producción
 ratelimit:
@@ -50,6 +51,11 @@ logging:
     max-history: 30
 
 server:
+  # Confiar en X-Forwarded-* sólo cuando Spring Boot las procesa vía ForwardedHeaderFilter.
+  # Esto requiere que el proxy/CDN del frente añada los headers y descarte cualquier valor
+  # entrante (sino, sigue siendo spoofable a nivel de proxy). El RateLimitInterceptor usará
+  # request.getRemoteAddr() que ya quedará resuelta a la IP real del cliente.
+  forward-headers-strategy: framework
   # Servidor con errores ocultos
   error:
     include-message: never  # NUNCA incluir mensajes de error internos

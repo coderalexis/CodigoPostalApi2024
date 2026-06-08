@@ -238,4 +238,159 @@ class ControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.first").value(false));
     }
+
+    // ============================================================
+    // Tests añadidos en #22: cobertura de los endpoints restantes
+    // ============================================================
+
+    @Test
+    @DisplayName("GET /zip-codes/search - Debe devolver coincidencias de prefijo")
+    void shouldSearchByPartialCode() throws Exception {
+        mockMvc.perform(get("/zip-codes/search")
+                .param("code", "010")
+                .param("limit", "5")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$", hasSize(lessThanOrEqualTo(5))));
+    }
+
+    @Test
+    @DisplayName("GET /zip-codes/search?simplified=true - Debe responder formato compacto")
+    void shouldSearchByPartialCodeSimplified() throws Exception {
+        mockMvc.perform(get("/zip-codes/search")
+                .param("code", "010")
+                .param("limit", "3")
+                .param("simplified", "true")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$[0].zip_code").exists())
+                // En la respuesta simplified no debe aparecer la lista de asentamientos
+                .andExpect(jsonPath("$[0].settlements").doesNotExist());
+    }
+
+    @Test
+    @DisplayName("GET /zip-codes/search - Debe rechazar prefijo no numérico")
+    void shouldRejectNonNumericPartialCode() throws Exception {
+        mockMvc.perform(get("/zip-codes/search")
+                .param("code", "01a")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /zip-codes/search - Debe respetar el límite máximo (50)")
+    void shouldRejectLimitGreaterThanFifty() throws Exception {
+        mockMvc.perform(get("/zip-codes/search")
+                .param("code", "01")
+                .param("limit", "999")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("GET /zip-codes/federal-entities - Debe listar entidades")
+    void shouldListFederalEntities() throws Exception {
+        mockMvc.perform(get("/zip-codes/federal-entities")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$", hasSize(greaterThan(0))))
+                .andExpect(jsonPath("$[0].name").exists())
+                .andExpect(jsonPath("$[0].zip_codes_count").exists());
+    }
+
+    @Test
+    @DisplayName("GET /zip-codes/federal-entities/{x}/municipalities - Debe devolver municipios")
+    void shouldListMunicipalitiesByFederalEntity() throws Exception {
+        mockMvc.perform(get("/zip-codes/federal-entities/Jalisco/municipalities")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$", hasSize(greaterThan(0))));
+    }
+
+    @Test
+    @DisplayName("GET /zip-codes/federal-entities/{x}/municipalities - 404 si no existe")
+    void shouldReturn404ForUnknownFederalEntityMunicipalities() throws Exception {
+        mockMvc.perform(get("/zip-codes/federal-entities/EntidadInexistente12345XYZ/municipalities")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("GET /zip-codes/{cp}/settlements - Debe devolver colonias")
+    void shouldListSettlementsByZipCode() throws Exception {
+        mockMvc.perform(get("/zip-codes/01000/settlements")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$").isArray())
+                .andExpect(jsonPath("$", hasSize(greaterThan(0))))
+                .andExpect(jsonPath("$[0].name").exists());
+    }
+
+    @Test
+    @DisplayName("GET /zip-codes/{cp}/settlements - 404 si código postal no existe")
+    void shouldReturn404ForUnknownZipCodeSettlements() throws Exception {
+        mockMvc.perform(get("/zip-codes/99999/settlements")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("GET /zip-codes/advanced - Debe combinar filtros con paginación")
+    void shouldRunAdvancedSearch() throws Exception {
+        mockMvc.perform(get("/zip-codes/advanced")
+                .param("federal_entity", "Jalisco")
+                .param("municipality", "Guadalajara")
+                .param("page", "0")
+                .param("size", "5")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.content", hasSize(lessThanOrEqualTo(5))))
+                .andExpect(jsonPath("$.pageNumber").value(0));
+    }
+
+    @Test
+    @DisplayName("GET /zip-codes/advanced?simplified=true - Debe responder formato compacto")
+    void shouldRunAdvancedSearchSimplified() throws Exception {
+        mockMvc.perform(get("/zip-codes/advanced")
+                .param("federal_entity", "Jalisco")
+                .param("municipality", "Guadalajara")
+                .param("simplified", "true")
+                .param("size", "3")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content").isArray())
+                .andExpect(jsonPath("$.content[0].settlements_count").exists());
+    }
+
+    @Test
+    @DisplayName("GET /zip-codes/advanced - 400 si no hay ningún filtro")
+    void shouldRejectAdvancedSearchWithNoFilters() throws Exception {
+        mockMvc.perform(get("/zip-codes/advanced")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @DisplayName("Las respuestas REST deben incluir el header Cache-Control")
+    void shouldAddCacheControlToSuccessfulResponses() throws Exception {
+        mockMvc.perform(get("/zip-codes/01000")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(header().exists("Cache-Control"))
+                .andExpect(header().string("Cache-Control", org.hamcrest.Matchers.containsString("max-age=")));
+    }
+
+    @Test
+    @DisplayName("Las respuestas de error NO deben incluir Cache-Control")
+    void shouldNotAddCacheControlToErrors() throws Exception {
+        mockMvc.perform(get("/zip-codes/99999")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isNotFound())
+                .andExpect(header().doesNotExist("Cache-Control"));
+    }
 }

@@ -8,6 +8,12 @@ spring:
   config:
     activate:
       on-profile: qa
+  # Caché con TTL más corto para pruebas (consolidado en un único bloque spring:
+  # para evitar duplicación de claves YAML, que SnakeYAML resuelve sobrescribiendo
+  # el primer bloque silenciosamente).
+  cache:
+    caffeine:
+      spec: maximumSize=5000,expireAfterAccess=10m
 
 # Rate limiting moderado para pruebas realistas
 ratelimit:
@@ -44,9 +50,3 @@ server:
     include-stacktrace: on-param  # Solo con ?trace=true
     include-exception: false
     include-binding-errors: always
-
-# Caché con TTL más corto para pruebas
-spring:
-  cache:
-    caffeine:
-      spec: maximumSize=5000,expireAfterAccess=10m

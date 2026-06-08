@@ -6,11 +6,20 @@ spring:
 
 zipcode:
   file:
-    path: CPdescarga.txt
+    # Antes era 'CPdescarga.txt' relativo y se cargaba via el fallback
+    # silencioso del classpath. Tras el fix #20 los paths explícitos deben
+    # existir; usamos el prefijo classpath: para ser claros sobre el origen.
+    path: classpath:CPdescarga.txt
 
 # Desactivar rate limiting en tests
 ratelimit:
   enabled: false
+
+# Desactivar warmup en tests: ya se ejercitan los caches en los propios tests
+# y precargar añade ~10 búsquedas paralelas al arranque que ralentizan la suite.
+cache:
+  warmup:
+    enabled: false
 
 # Logging reducido para tests
 logging:

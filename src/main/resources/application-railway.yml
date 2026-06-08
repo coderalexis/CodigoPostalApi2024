@@ -12,6 +12,10 @@ spring:
 # Puerto dinámico (Railway asigna via $PORT)
 server:
   port: ${PORT:8080}
+  # Railway termina TLS en su edge y propaga X-Forwarded-*. Activar el filtro framework
+  # para que request.getRemoteAddr() devuelva la IP real del cliente y el rate limit
+  # por IP no sea trivialmente evadible mediante spoofing del header.
+  forward-headers-strategy: framework
   error:
     include-message: never
     include-stacktrace: never

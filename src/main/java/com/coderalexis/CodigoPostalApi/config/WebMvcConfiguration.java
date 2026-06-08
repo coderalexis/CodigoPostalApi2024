@@ -18,22 +18,31 @@ public class WebMvcConfiguration implements WebMvcConfigurer {
 
     private final RateLimitInterceptor rateLimitInterceptor;
     private final RateLimitProperties rateLimitProperties;
+    private final CacheControlInterceptor cacheControlInterceptor;
 
     public WebMvcConfiguration(RateLimitInterceptor rateLimitInterceptor,
-                              RateLimitProperties rateLimitProperties) {
+                              RateLimitProperties rateLimitProperties,
+                              CacheControlInterceptor cacheControlInterceptor) {
         this.rateLimitInterceptor = rateLimitInterceptor;
         this.rateLimitProperties = rateLimitProperties;
+        this.cacheControlInterceptor = cacheControlInterceptor;
     }
 
     @Override
     public void addResourceHandlers(ResourceHandlerRegistry registry) {
-        // Cache-Control headers for API responses
+        // Cache-Control para recursos estáticos (favicon, etc.). Las respuestas REST
+        // usan CacheControlInterceptor (#23) que aplica TTLs específicos por endpoint.
         registry.addResourceHandler("/**")
                 .setCacheControl(CacheControl.maxAge(5, TimeUnit.MINUTES).cachePrivate());
     }
 
     @Override
     public void addInterceptors(InterceptorRegistry registry) {
+        // Cache-Control para endpoints REST: se registra primero para que las
+        // respuestas exitosas siempre lleven el header adecuado.
+        registry.addInterceptor(cacheControlInterceptor)
+                .addPathPatterns("/zip-codes/**", "/zip-codes");
+
         if (rateLimitProperties.isEnabled()) {
             log.info("✓ Rate Limiting HABILITADO: {} req/min, Burst: {}",
                 rateLimitProperties.getRequestsPerMinute(),

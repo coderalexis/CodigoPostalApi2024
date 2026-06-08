@@ -1,5 +1,10 @@
 package com.coderalexis.CodigoPostalApi.config;
 
+import com.coderalexis.CodigoPostalApi.exceptions.ErrorResponse;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.databind.json.JsonMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.github.bucket4j.Bandwidth;
@@ -8,6 +13,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 
@@ -15,17 +21,34 @@ import java.math.BigInteger;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.concurrent.TimeUnit;
 
 /**
  * Rate limiting interceptor using Token Bucket algorithm (Bucket4j).
  * Uses Caffeine cache for automatic bucket eviction to prevent memory leaks.
+ *
+ * <p>Fix #3: la IP del cliente se obtiene exclusivamente via
+ * {@code request.getRemoteAddr()}. En entornos detrás de proxy/CDN se debe
+ * habilitar {@code server.forward-headers-strategy=framework} (configurado en
+ * los perfiles prod/railway) para que Spring Boot resuelva la cadena de
+ * X-Forwarded-* a través de su filtro ya validado, en vez de confiar a ciegas
+ * en el header (que es spoofable trivialmente).</p>
  */
 @Slf4j
 @Component
 public class RateLimitInterceptor implements HandlerInterceptor {
 
     private final RateLimitProperties rateLimitProperties;
+    // ObjectMapper privado con JSR310 registrado. Antes lo inyectábamos por
+    // constructor pero el orden de inicialización (WebMvc → Interceptors →
+    // JacksonAutoConfiguration) provocaba que la dependencia no estuviera
+    // disponible en algunos contextos de test. Como sólo serializamos un
+    // ErrorResponse, una instancia local autosuficiente es más robusta.
+    private static final ObjectMapper OBJECT_MAPPER = JsonMapper.builder()
+            .addModule(new JavaTimeModule())
+            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+            .build();
     // Caffeine cache with TTL-based eviction (buckets expire after 5 minutes of inactivity)
     private final Cache<String, Bucket> bucketCache;
 
@@ -61,18 +84,33 @@ public class RateLimitInterceptor implements HandlerInterceptor {
         }
 
         log.warn("Rate limit excedido para IP: {}", clientIp);
+        writeRateLimitExceededResponse(request, response);
+        return false;
+    }
+
+    /**
+     * Fix #7: serializa la respuesta 429 reusando {@link ErrorResponse} y
+     * {@link ObjectMapper} para mantener el mismo formato que el resto de
+     * errores (timestamp formateado, status, message, path) en vez de
+     * construir el JSON con {@code String.format}.
+     */
+    private void writeRateLimitExceededResponse(HttpServletRequest request, HttpServletResponse response)
+            throws java.io.IOException {
         response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
         response.setHeader("X-RateLimit-Limit", String.valueOf(rateLimitProperties.getRequestsPerMinute()));
         response.setHeader("X-RateLimit-Remaining", "0");
         response.setHeader("X-RateLimit-Retry-After-Seconds", "60");
-        response.setContentType("application/json");
-        response.getWriter().write(String.format(
-            "{\"status\":429,\"message\":\"Limite de peticiones excedido. Maximo %d peticiones por minuto.\",\"timestamp\":\"%s\"}",
-            rateLimitProperties.getRequestsPerMinute(),
-            java.time.LocalDateTime.now()
-        ));
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
 
-        return false;
+        ErrorResponse body = new ErrorResponse(
+                HttpStatus.TOO_MANY_REQUESTS.value(),
+                String.format("Limite de peticiones excedido. Maximo %d peticiones por minuto.",
+                        rateLimitProperties.getRequestsPerMinute()),
+                request.getRequestURI(),
+                LocalDateTime.now()
+        );
+
+        OBJECT_MAPPER.writeValue(response.getWriter(), body);
     }
 
     private Bucket createNewBucket() {
@@ -86,12 +124,15 @@ public class RateLimitInterceptor implements HandlerInterceptor {
                 .build();
     }
 
+    /**
+     * Devuelve la IP real del cliente. Spring Boot, cuando
+     * {@code server.forward-headers-strategy} está en {@code framework} o
+     * {@code native}, ya resuelve {@code request.getRemoteAddr()} a la IP
+     * propagada por el proxy de confianza. Si no hay proxy configurado, este
+     * método cae a la IP TCP directa, que tampoco es spoofable.
+     */
     private String getClientIP(HttpServletRequest request) {
-        String xfHeader = request.getHeader("X-Forwarded-For");
-        if (xfHeader == null || xfHeader.isEmpty() || "unknown".equalsIgnoreCase(xfHeader)) {
-            return request.getRemoteAddr();
-        }
-        return xfHeader.split(",")[0].trim();
+        return request.getRemoteAddr();
     }
 
     private boolean isWhitelisted(String ip) {
