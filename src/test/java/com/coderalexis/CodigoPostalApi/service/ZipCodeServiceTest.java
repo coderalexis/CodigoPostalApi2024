@@ -55,13 +55,14 @@ class ZipCodeServiceTest {
     @Test
     @DisplayName("Debe buscar por entidad federativa")
     void shouldSearchByFederalEntity() {
-        List<ZipCode> results = zipCodeService.searchByFederalEntity("Ciudad de México");
+        PagedResponse<ZipCode> results = zipCodeService.searchByFederalEntity("Ciudad de México", 0, 50);
 
         assertNotNull(results, "Los resultados no deben ser null");
-        assertFalse(results.isEmpty(), "Debe encontrar resultados");
+        assertTrue(results.getTotalElements() > 0, "Debe encontrar resultados");
+        assertFalse(results.getContent().isEmpty(), "La primera página debe traer contenido");
 
         // Verificar que todos los resultados contienen la entidad buscada
-        results.forEach(zipCode -> {
+        results.getContent().forEach(zipCode -> {
             assertNotNull(zipCode.getFederalEntity());
             assertTrue(
                 zipCode.getFederalEntity().toLowerCase().contains("ciudad") ||
@@ -74,16 +75,16 @@ class ZipCodeServiceTest {
     @Test
     @DisplayName("Debe buscar por entidad federativa sin acentos")
     void shouldSearchByFederalEntityWithoutAccents() {
-        List<ZipCode> resultsWithAccents = zipCodeService.searchByFederalEntity("México");
-        List<ZipCode> resultsWithoutAccents = zipCodeService.searchByFederalEntity("Mexico");
+        PagedResponse<ZipCode> resultsWithAccents = zipCodeService.searchByFederalEntity("México", 0, 1);
+        PagedResponse<ZipCode> resultsWithoutAccents = zipCodeService.searchByFederalEntity("Mexico", 0, 1);
 
         assertNotNull(resultsWithAccents);
         assertNotNull(resultsWithoutAccents);
-        assertFalse(resultsWithAccents.isEmpty());
-        assertFalse(resultsWithoutAccents.isEmpty());
+        assertTrue(resultsWithAccents.getTotalElements() > 0);
+        assertTrue(resultsWithoutAccents.getTotalElements() > 0);
 
         // Ambas búsquedas deberían retornar la misma cantidad (normalización)
-        assertEquals(resultsWithAccents.size(), resultsWithoutAccents.size(),
+        assertEquals(resultsWithAccents.getTotalElements(), resultsWithoutAccents.getTotalElements(),
             "La búsqueda debe ser insensible a acentos");
     }
 
@@ -91,7 +92,7 @@ class ZipCodeServiceTest {
     @DisplayName("Debe lanzar excepción para entidad federativa no encontrada")
     void shouldThrowExceptionForInvalidFederalEntity() {
         assertThrows(ZipCodeNotFoundException.class, () -> {
-            zipCodeService.searchByFederalEntity("EntidadInexistente12345");
+            zipCodeService.searchByFederalEntity("EntidadInexistente12345", 0, 20);
         }, "Debe lanzar ZipCodeNotFoundException para entidad inexistente");
     }
 
@@ -100,7 +101,7 @@ class ZipCodeServiceTest {
     @DisplayName("Debe validar nulos antes de generar la llave de cache en entidad")
     void shouldValidateNullFederalEntityBeforeCacheKey() {
         assertThrows(IllegalArgumentException.class, () -> {
-            zipCodeService.searchByFederalEntity(null);
+            zipCodeService.searchByFederalEntity(null, 0, 20);
         }, "Debe lanzar IllegalArgumentException para término null");
     }
 
@@ -108,11 +109,11 @@ class ZipCodeServiceTest {
     @DisplayName("Debe lanzar excepción para término de búsqueda vacío en entidad")
     void shouldThrowExceptionForEmptyFederalEntitySearch() {
         assertThrows(IllegalArgumentException.class, () -> {
-            zipCodeService.searchByFederalEntity("");
+            zipCodeService.searchByFederalEntity("", 0, 20);
         }, "Debe lanzar IllegalArgumentException para término vacío");
 
         assertThrows(IllegalArgumentException.class, () -> {
-            zipCodeService.searchByFederalEntity("   ");
+            zipCodeService.searchByFederalEntity("   ", 0, 20);
         }, "Debe lanzar IllegalArgumentException para término solo con espacios");
     }
 
@@ -120,12 +121,12 @@ class ZipCodeServiceTest {
     @DisplayName("Debe buscar por municipio")
     void shouldSearchByMunicipality() {
         // Ajusta el municipio según tu archivo de prueba
-        List<ZipCode> results = zipCodeService.searchByMunicipality("Álvaro Obregón");
+        PagedResponse<ZipCode> results = zipCodeService.searchByMunicipality("Álvaro Obregón", 0, 50);
 
         assertNotNull(results, "Los resultados no deben ser null");
-        assertFalse(results.isEmpty(), "Debe encontrar resultados");
+        assertTrue(results.getTotalElements() > 0, "Debe encontrar resultados");
 
-        results.forEach(zipCode -> {
+        results.getContent().forEach(zipCode -> {
             assertNotNull(zipCode.getMunicipality());
         });
     }
@@ -133,23 +134,21 @@ class ZipCodeServiceTest {
     @Test
     @DisplayName("Debe buscar por municipio sin acentos")
     void shouldSearchByMunicipalityWithoutAccents() {
-        List<ZipCode> resultsWithAccents = zipCodeService.searchByMunicipality("Álvaro");
-        List<ZipCode> resultsWithoutAccents = zipCodeService.searchByMunicipality("Alvaro");
+        PagedResponse<ZipCode> resultsWithAccents = zipCodeService.searchByMunicipality("Álvaro", 0, 1);
+        PagedResponse<ZipCode> resultsWithoutAccents = zipCodeService.searchByMunicipality("Alvaro", 0, 1);
 
         assertNotNull(resultsWithAccents);
         assertNotNull(resultsWithoutAccents);
 
-        if (!resultsWithAccents.isEmpty() && !resultsWithoutAccents.isEmpty()) {
-            assertEquals(resultsWithAccents.size(), resultsWithoutAccents.size(),
-                "La búsqueda debe ser insensible a acentos");
-        }
+        assertEquals(resultsWithAccents.getTotalElements(), resultsWithoutAccents.getTotalElements(),
+            "La búsqueda debe ser insensible a acentos");
     }
 
     @Test
     @DisplayName("Debe lanzar excepción para municipio no encontrado")
     void shouldThrowExceptionForInvalidMunicipality() {
         assertThrows(ZipCodeNotFoundException.class, () -> {
-            zipCodeService.searchByMunicipality("MunicipioInexistente12345");
+            zipCodeService.searchByMunicipality("MunicipioInexistente12345", 0, 20);
         }, "Debe lanzar ZipCodeNotFoundException para municipio inexistente");
     }
 
@@ -157,21 +156,20 @@ class ZipCodeServiceTest {
     @DisplayName("Debe lanzar excepción para término de búsqueda vacío en municipio")
     void shouldThrowExceptionForEmptyMunicipalitySearch() {
         assertThrows(IllegalArgumentException.class, () -> {
-            zipCodeService.searchByMunicipality("");
+            zipCodeService.searchByMunicipality("", 0, 20);
         }, "Debe lanzar IllegalArgumentException para término vacío");
     }
 
     @Test
     @DisplayName("Debe paginar búsqueda por entidad federativa sin perder metadatos")
     void shouldPaginateFederalEntitySearch() {
-        List<ZipCode> allResults = zipCodeService.searchByFederalEntity("Ciudad de México");
         PagedResponse<ZipCode> firstPage = zipCodeService.searchByFederalEntity("Ciudad de México", 0, 5);
 
         assertNotNull(firstPage);
         assertEquals(0, firstPage.getPageNumber());
         assertEquals(5, firstPage.getPageSize());
-        assertEquals(allResults.size(), firstPage.getTotalElements());
-        assertEquals(Math.min(5, allResults.size()), firstPage.getContent().size());
+        assertTrue(firstPage.getTotalElements() > 0, "Debe conservar el total real de elementos");
+        assertEquals(Math.min(5, (int) firstPage.getTotalElements()), firstPage.getContent().size());
         assertTrue(firstPage.isFirst());
     }
 
@@ -235,20 +233,21 @@ class ZipCodeServiceTest {
     @Test
     @DisplayName("Debe buscar por búsqueda parcial en entidad federativa")
     void shouldSearchByPartialFederalEntity() {
-        List<ZipCode> results = zipCodeService.searchByFederalEntity("mex");
+        PagedResponse<ZipCode> results = zipCodeService.searchByFederalEntity("mex", 0, 20);
 
         assertNotNull(results);
-        assertFalse(results.isEmpty(), "Búsqueda parcial debe retornar resultados");
+        assertTrue(results.getTotalElements() > 0, "Búsqueda parcial debe retornar resultados");
     }
 
     @Test
     @DisplayName("Debe buscar por búsqueda parcial en municipio")
     void shouldSearchByPartialMunicipality() {
-        List<ZipCode> results = zipCodeService.searchByMunicipality("gua");
+        PagedResponse<ZipCode> results = zipCodeService.searchByMunicipality("gua", 0, 20);
 
         assertNotNull(results);
         // Este test puede pasar o fallar dependiendo del contenido del archivo
         // Si no hay municipios con "gua", ajusta el término de búsqueda
+        assertTrue(results.getTotalElements() > 0);
     }
 
     @Test
@@ -279,14 +278,13 @@ class ZipCodeServiceTest {
                 .zoneType("Urbano")
                 .build();
 
-        List<ZipCode> allResults = zipCodeService.advancedSearch(request);
         PagedResponse<ZipCode> firstPage = zipCodeService.advancedSearch(request, 0, 5);
 
         assertNotNull(firstPage);
         assertEquals(0, firstPage.getPageNumber());
         assertEquals(5, firstPage.getPageSize());
-        assertEquals(allResults.size(), firstPage.getTotalElements());
-        assertEquals(Math.min(5, allResults.size()), firstPage.getContent().size());
+        assertTrue(firstPage.getTotalElements() > 0, "Debe encontrar resultados con los filtros dados");
+        assertEquals(Math.min(5, (int) firstPage.getTotalElements()), firstPage.getContent().size());
         assertTrue(firstPage.getContent().stream()
                 .allMatch(zipCode -> zipCode.getZipCode().compareTo("00000") >= 0));
     }

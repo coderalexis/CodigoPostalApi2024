@@ -65,3 +65,11 @@ logging:
 zipcode:
   file:
     path: classpath:CPdescarga.txt
+
+# Documentación OpenAPI deshabilitada en producción: no exponer el contrato ni el
+# Swagger UI públicamente. (SpringDoc los habilita por defecto y lo advierte en logs.)
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false

@@ -8,12 +8,9 @@ spring:
   config:
     activate:
       on-profile: qa
-  # Caché con TTL más corto para pruebas (consolidado en un único bloque spring:
-  # para evitar duplicación de claves YAML, que SnakeYAML resuelve sobrescribiendo
-  # el primer bloque silenciosamente).
-  cache:
-    caffeine:
-      spec: maximumSize=5000,expireAfterAccess=10m
+  # NOTA: no se define spring.cache.caffeine.spec porque CacheConfiguration registra
+  # cada región con registerCustomCache(...), lo que ignora el spec global. Mantenerlo
+  # aquí sólo confundía (igual que ya se removió del perfil prod).
 
 # Rate limiting moderado para pruebas realistas
 ratelimit:

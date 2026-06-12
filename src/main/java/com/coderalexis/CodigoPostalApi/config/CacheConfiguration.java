@@ -25,13 +25,9 @@ public class CacheConfiguration {
     public CacheManager cacheManager() {
         CaffeineCacheManager cacheManager = new CaffeineCacheManager(
                 "zipcodes",
-                "federalEntitySearch",
                 "federalEntitySearchPaged",
-                "municipalitySearch",
                 "municipalitySearchPaged",
-                "federalEntities",
                 "municipalitiesByEntity",
-                "advancedSearch",
                 "advancedSearchPaged"
         );
 
@@ -44,23 +40,8 @@ public class CacheConfiguration {
                         .recordStats()
                         .build());
 
-        // Federal entity search: results can be large (full ZipCode objects with settlements).
-        registerCache(cacheManager, "federalEntitySearch",
-                Caffeine.newBuilder()
-                        .maximumSize(50)
-                        .expireAfterWrite(5, TimeUnit.MINUTES)
-                        .recordStats()
-                        .build());
-
-        // Paginated variant: more specific keys, separate cache entry.
+        // Federal entity search (paginated): results can be large (full ZipCode objects with settlements).
         registerCache(cacheManager, "federalEntitySearchPaged",
-                Caffeine.newBuilder()
-                        .maximumSize(100)
-                        .expireAfterWrite(5, TimeUnit.MINUTES)
-                        .recordStats()
-                        .build());
-
-        registerCache(cacheManager, "municipalitySearch",
                 Caffeine.newBuilder()
                         .maximumSize(100)
                         .expireAfterWrite(5, TimeUnit.MINUTES)
@@ -77,25 +58,13 @@ public class CacheConfiguration {
         // NOTA: la cache de búsqueda parcial (autocompletado) se gestiona directamente
         // con Caffeine en ZipCodeService para evitar la trampa de self-invocation de
         // Spring Cache.
-
-        registerCache(cacheManager, "federalEntities",
-                Caffeine.newBuilder()
-                        .maximumSize(1)
-                        .expireAfterWrite(1, TimeUnit.HOURS)
-                        .recordStats()
-                        .build());
+        // NOTA: getAllFederalEntities() ya NO se cachea (devuelve un campo inmutable
+        // en memoria), por eso no se registra la región "federalEntities".
 
         registerCache(cacheManager, "municipalitiesByEntity",
                 Caffeine.newBuilder()
                         .maximumSize(50)
                         .expireAfterWrite(30, TimeUnit.MINUTES)
-                        .recordStats()
-                        .build());
-
-        registerCache(cacheManager, "advancedSearch",
-                Caffeine.newBuilder()
-                        .maximumSize(25)
-                        .expireAfterWrite(5, TimeUnit.MINUTES)
                         .recordStats()
                         .build());
 

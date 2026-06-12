@@ -8,27 +8,17 @@ import com.coderalexis.CodigoPostalApi.model.PagedResponse;
 import com.coderalexis.CodigoPostalApi.model.Settlements;
 import com.coderalexis.CodigoPostalApi.model.ZipCode;
 import com.coderalexis.CodigoPostalApi.model.ZipCodeStats;
+import com.coderalexis.CodigoPostalApi.util.PaginationSupport;
 import com.coderalexis.CodigoPostalApi.util.Util;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import io.micrometer.core.instrument.Timer;
 import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Service;
 
-import java.io.BufferedInputStream;
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.nio.charset.Charset;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -39,44 +29,31 @@ import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
 import java.util.Set;
-import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Predicate;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
+/**
+ * Lógica de consulta de códigos postales sobre los índices en memoria. La carga
+ * y el parseo del catálogo se delegan en {@link SepomexZipCodeLoader} (#10) y la
+ * mecánica de paginación en {@link PaginationSupport}, dejando esta clase enfocada
+ * en las búsquedas y sus métricas/caché.
+ */
 @Service
 @Slf4j
 public class ZipCodeService {
-    // Pre-compiled Pattern for splitting lines (avoids recompiling on every split call)
-    private static final Pattern PIPE_PATTERN = Pattern.compile("\\|");
 
-    // Column indices based on CPdescarga.txt structure
-    private static final int COL_ZIP_CODE = 0;
-    private static final int COL_SETTLEMENT_NAME = 1;
-    private static final int COL_SETTLEMENT_TYPE = 2;
-    private static final int COL_MUNICIPALITY = 3;
-    private static final int COL_FEDERAL_ENTITY = 4;
-    private static final int COL_LOCALITY = 5;
-    private static final int COL_ZONE_TYPE_INDEX = 13;
-    private static final int MIN_COLUMNS = 6;
-    private static final int MAX_ERRORS_THRESHOLD = 100;
     private static final int PARTIAL_SEARCH_MAX_LIMIT = 50;
-
-    private static final Pattern ZIP_CODE_PATTERN =
-        Pattern.compile("^\\d{5}$");
     // Pre-compiled pattern for validating digit-only input (avoids recompiling on every partial search)
     private static final Pattern DIGITS_PATTERN = Pattern.compile("^\\d+$");
 
-    // Data is loaded once at startup and then treated as read-only. Non-concurrent
-    // collections avoid unnecessary synchronization overhead on the hot read path.
-    private final Map<String, ZipCode> zipCodesByCode = new HashMap<>();
-    // Sorted map for O(log n) prefix searches instead of O(n) full scan
-    private final NavigableMap<String, ZipCode> zipCodesSorted = new TreeMap<>();
-    // Inverted indices for fast searches by entity and municipality
-    private final Map<String, Set<ZipCode>> zipCodesByNormalizedEntity = new HashMap<>();
-    private final Map<String, Set<ZipCode>> zipCodesByNormalizedMunicipality = new HashMap<>();
+    // Índices cargados una vez al arranque y tratados como solo-lectura. Se publican
+    // como volatile: la escritura de la referencia (en loadZipCodes) establece un
+    // happens-before con cualquier lectura posterior desde los hilos de request.
+    private volatile Map<String, ZipCode> zipCodesByCode = Map.of();
+    private volatile NavigableMap<String, ZipCode> zipCodesSorted = Collections.emptyNavigableMap();
+    private volatile Map<String, Set<ZipCode>> zipCodesByNormalizedEntity = Map.of();
+    private volatile Map<String, Set<ZipCode>> zipCodesByNormalizedMunicipality = Map.of();
 
     // Pre-computed statistics (immutable after load)
     private volatile ZipCodeStats cachedStats;
@@ -101,17 +78,13 @@ public class ZipCodeService {
             .build();
 
     private volatile boolean dataLoaded = false;
-    private int errorCount = 0;
 
     private final MetricsConfiguration metricsConfiguration;
+    private final SepomexZipCodeLoader loader;
 
-    @Value("${zipcode.file.path}")
-    private String filePath;
-
-    private static final String RESOURCE_FILE = "CPdescarga.txt";
-
-    public ZipCodeService(MetricsConfiguration metricsConfiguration) {
+    public ZipCodeService(MetricsConfiguration metricsConfiguration, SepomexZipCodeLoader loader) {
         this.metricsConfiguration = metricsConfiguration;
+        this.loader = loader;
     }
 
     public boolean isDataLoaded() {
@@ -141,37 +114,44 @@ public class ZipCodeService {
 
     @PostConstruct
     public void loadZipCodes() {
-        try (InputStream stream = getInputStream()) {
-            if (stream == null) {
-                log.error("No se pudo cargar ningun archivo de codigos postales");
-                return;
-            }
-
-            processZipCodeFile(stream);
-            buildPreComputedData();
-            // Fix #2: marcamos dataLoaded sólo DESPUÉS de que las estructuras
-            // precomputadas (cachedStats, cachedFederalEntities,
-            // municipalitiesByNormalizedEntity) estén completas. De lo contrario
-            // un caller temprano podría ver dataLoaded=true pero campos null.
-            dataLoaded = true;
+        // Fail-fast: si el catálogo no puede cargarse, abortamos el arranque en vez
+        // de dejar el proceso vivo sirviendo 500 (NPE en los getters precomputados)
+        // y 200 con cuerpos nulos. Para una API cuyo único propósito son estos datos,
+        // es preferible que el orquestador (Railway/k8s) reinicie el contenedor.
+        ZipCodeData data;
+        try {
+            data = loader.load();
         } catch (IOException e) {
-            log.error("Error al cargar los codigos postales", e);
+            throw new IllegalStateException("Error al cargar los codigos postales", e);
         }
+
+        if (data == null || data.byCode().isEmpty()) {
+            throw new IllegalStateException(
+                    "No se pudo cargar el catalogo de codigos postales o quedo vacio; abortando el arranque");
+        }
+
+        this.zipCodesByCode = data.byCode();
+        this.zipCodesSorted = data.sorted();
+        this.zipCodesByNormalizedEntity = data.byNormalizedEntity();
+        this.zipCodesByNormalizedMunicipality = data.byNormalizedMunicipality();
+
+        buildPreComputedData();
+
+        // Fix #2: marcamos dataLoaded sólo DESPUÉS de que las estructuras
+        // precomputadas (cachedStats, cachedFederalEntities,
+        // municipalitiesByNormalizedEntity) estén completas.
+        dataLoaded = true;
     }
 
     private void buildPreComputedData() {
-        // Make all settlement lists immutable to prevent accidental mutation of internal state.
-        // Single pass (#10): durante esta pasada también acumulamos totalSettlements
-        // y la lista de FederalEntity para evitar recorrer el mapa varias veces.
+        // Single pass (#10): durante esta pasada acumulamos totalSettlements y la
+        // lista de FederalEntity para evitar recorrer el mapa varias veces.
         long totalSettlements = 0L;
         Map<String, List<ZipCode>> zipCodesByEntity = new HashMap<>();
         Map<String, Set<String>> municipalitiesByEntity = new HashMap<>();
 
         for (ZipCode zc : zipCodesByCode.values()) {
-            if (zc.getSettlements() != null) {
-                zc.setSettlements(List.copyOf(zc.getSettlements()));
-                totalSettlements += zc.getSettlements().size();
-            }
+            totalSettlements += zc.getSettlements().size();
 
             zipCodesByEntity
                     .computeIfAbsent(zc.getFederalEntity(), k -> new ArrayList<>())
@@ -181,7 +161,6 @@ public class ZipCodeService {
                     .computeIfAbsent(zc.getNormalizedFederalEntity(), k -> new TreeSet<>())
                     .add(zc.getMunicipality());
         }
-        log.info("  - Listas de asentamientos convertidas a inmutables");
 
         cachedStats = ZipCodeStats.builder()
                 .totalZipCodes(zipCodesByCode.size())
@@ -220,242 +199,6 @@ public class ZipCodeService {
     }
 
     /**
-     * Resuelve el InputStream del catálogo SEPOMEX.
-     *
-     * <p>Fix #20: si el usuario configura un path explícito (vía
-     * {@code zipcode.file.path}) y éste no existe, fallamos rápido en vez de
-     * caer silenciosamente al recurso interno, que enmascaraba problemas de
-     * despliegue (config incorrecta sin error visible).</p>
-     */
-    private InputStream getInputStream() throws IOException {
-        boolean userConfiguredPath = filePath != null && !filePath.isBlank();
-
-        if (userConfiguredPath && filePath.startsWith("classpath:")) {
-            String resourcePath = filePath.substring("classpath:".length());
-            ClassPathResource resource = new ClassPathResource(resourcePath);
-            if (resource.exists()) {
-                log.info("Cargando codigos postales desde classpath: {}", resourcePath);
-                return resource.getInputStream();
-            }
-            throw new IOException(
-                "Recurso configurado en 'zipcode.file.path' no encontrado en classpath: " + resourcePath);
-        }
-
-        if (userConfiguredPath) {
-            Path path = Paths.get(filePath);
-            if (Files.exists(path)) {
-                log.info("Cargando codigos postales desde {}", filePath);
-                return Files.newInputStream(path);
-            }
-            throw new IOException(
-                "Archivo configurado en 'zipcode.file.path' no encontrado: " + filePath);
-        }
-
-        ClassPathResource resource = new ClassPathResource(RESOURCE_FILE);
-        if (resource.exists()) {
-            log.info("Cargando codigos postales desde recurso interno {}", RESOURCE_FILE);
-            return resource.getInputStream();
-        }
-
-        return null;
-    }
-
-    private void processZipCodeFile(InputStream stream) throws IOException {
-        long startTime = System.currentTimeMillis();
-        errorCount = 0;
-
-        BufferedInputStream bufferedStream = new BufferedInputStream(stream);
-        Charset charset = detectCharset(bufferedStream);
-        log.info("Encoding detectado: {}", charset.name());
-
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(bufferedStream, charset))) {
-
-            // Skip first two lines (metadata and header)
-            reader.readLine();
-            reader.readLine();
-
-            long linesProcessed = reader.lines()
-                    .filter(this::processLine)
-                    .count();
-
-            long duration = System.currentTimeMillis() - startTime;
-
-            log.info("Datos cargados exitosamente en {}ms", duration);
-            log.info("  - Codigos postales unicos: {}", zipCodesByCode.size());
-            log.info("  - Entidades federativas: {}", zipCodesByNormalizedEntity.size());
-            log.info("  - Municipios: {}", zipCodesByNormalizedMunicipality.size());
-            log.info("  - Lineas procesadas: {}", linesProcessed);
-            if (errorCount > 0) {
-                log.warn("  - Lineas con errores: {}", errorCount);
-            }
-        }
-    }
-
-    private Charset detectCharset(BufferedInputStream stream) throws IOException {
-        stream.mark(4096);
-        byte[] sample = new byte[4096];
-        int bytesRead = stream.read(sample);
-        stream.reset();
-
-        if (bytesRead <= 0) {
-            return StandardCharsets.UTF_8;
-        }
-
-        boolean hasHighBytes = false;
-        boolean hasUtf8Sequences = false;
-
-        for (int i = 0; i < bytesRead; i++) {
-            int b = sample[i] & 0xFF;
-            if (b >= 0x80) {
-                hasHighBytes = true;
-                if ((b & 0xE0) == 0xC0 || (b & 0xF0) == 0xE0) {
-                    if (i + 1 < bytesRead && (sample[i + 1] & 0xC0) == 0x80) {
-                        hasUtf8Sequences = true;
-                    }
-                }
-            }
-        }
-
-        if (hasHighBytes && !hasUtf8Sequences) {
-            log.debug("Detectado encoding ISO-8859-1 (bytes altos sin secuencias UTF-8)");
-            return StandardCharsets.ISO_8859_1;
-        }
-
-        if (hasUtf8Sequences) {
-            log.debug("Detectado encoding UTF-8 (secuencias UTF-8 validas encontradas)");
-            return StandardCharsets.UTF_8;
-        }
-
-        log.debug("Usando encoding por defecto ISO-8859-1 para archivo SEPOMEX");
-        return StandardCharsets.ISO_8859_1;
-    }
-
-    private boolean processLine(String line) {
-        try {
-            String[] words = PIPE_PATTERN.split(line);
-
-            if (words.length < MIN_COLUMNS) {
-                handleError("Linea con formato incorrecto (columnas insuficientes): {}",
-                    line.substring(0, Math.min(100, line.length())));
-                return false;
-            }
-
-            String zipCodeKey = words[COL_ZIP_CODE].trim();
-
-            if (!isValidZipCode(zipCodeKey)) {
-                handleError("Codigo postal invalido '{}' en linea: {}",
-                    zipCodeKey, line.substring(0, Math.min(100, line.length())));
-                return false;
-            }
-
-            if (words[COL_FEDERAL_ENTITY].trim().isEmpty() ||
-                words[COL_MUNICIPALITY].trim().isEmpty()) {
-                handleError("Campos requeridos vacios en codigo postal: {}", zipCodeKey);
-                return false;
-            }
-
-            String federalEntity = words[COL_FEDERAL_ENTITY].trim();
-            String municipality = words[COL_MUNICIPALITY].trim();
-            String normalizedEntity = Util.normalizeString(federalEntity);
-            String normalizedMunicipality = Util.normalizeString(municipality);
-
-            ZipCode zipCode = zipCodesByCode.computeIfAbsent(zipCodeKey, k -> {
-                ZipCode z = new ZipCode();
-                z.setZipCode(k);
-                z.setLocality(words[COL_LOCALITY].trim());
-                z.setFederalEntity(federalEntity);
-                z.setMunicipality(municipality);
-                z.setNormalizedFederalEntity(normalizedEntity);
-                z.setNormalizedMunicipality(normalizedMunicipality);
-                z.setSettlements(new ArrayList<>());
-
-                // Add to sorted map for prefix searches
-                zipCodesSorted.put(k, z);
-                return z;
-            });
-
-            String settlementName = words[COL_SETTLEMENT_NAME].trim();
-            String settlementTypeVal = words[COL_SETTLEMENT_TYPE].trim();
-            String zoneTypeVal = words.length > COL_ZONE_TYPE_INDEX ?
-                words[COL_ZONE_TYPE_INDEX].trim() : "";
-
-            // Fix #18: Settlements ahora es un record inmutable, construido en una
-            // sola expresión con los campos normalizados precomputados.
-            Settlements settlement = new Settlements(
-                    settlementName,
-                    zoneTypeVal,
-                    settlementTypeVal,
-                    Util.normalizeString(settlementName),
-                    Util.normalizeString(settlementTypeVal),
-                    Util.normalizeString(zoneTypeVal));
-
-            zipCode.getSettlements().add(settlement);
-
-            zipCodesByNormalizedEntity
-                    .computeIfAbsent(normalizedEntity, k -> new HashSet<>())
-                    .add(zipCode);
-
-            zipCodesByNormalizedMunicipality
-                    .computeIfAbsent(normalizedMunicipality, k -> new HashSet<>())
-                    .add(zipCode);
-
-            return true;
-
-        } catch (Exception e) {
-            handleError("Error procesando la linea: {}",
-                line.substring(0, Math.min(100, line.length())));
-            log.debug("Detalle del error:", e);
-            return false;
-        }
-    }
-
-    private void handleError(String message, Object... args) {
-        errorCount++;
-        if (errorCount <= MAX_ERRORS_THRESHOLD) {
-            log.warn(message, args);
-        } else if (errorCount == MAX_ERRORS_THRESHOLD + 1) {
-            log.warn("Se alcanzo el limite de {} errores. Los siguientes errores no se mostraran.", MAX_ERRORS_THRESHOLD);
-        }
-    }
-
-    private boolean isValidZipCode(String zipCode) {
-        return zipCode != null && ZIP_CODE_PATTERN.matcher(zipCode).matches();
-    }
-
-    /**
-     * @deprecated Usar la variante paginada {@link #searchByFederalEntity(String, int, int)}.
-     * Este método materializa todos los ZipCodes coincidentes (que para una entidad como
-     * "Ciudad de México" pueden ser ≥25 000) y los retiene en cache; el controlador
-     * siempre llama a la versión paginada. Se mantiene sólo por compatibilidad de tests.
-     */
-    @Deprecated(forRemoval = false)
-    @Cacheable(value = "federalEntitySearch", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#searchTerm)")
-    public List<ZipCode> searchByFederalEntity(String searchTerm) {
-        Timer.Sample sample = metricsConfiguration.startTimer();
-        try {
-            metricsConfiguration.recordSearch("federal_entity");
-            String normalizedSearchTerm = validateSearchTerm(searchTerm, "federal_entity");
-
-            List<ZipCode> results = findOrderedCandidatesInIndex(
-                    zipCodesByNormalizedEntity,
-                    normalizedSearchTerm);
-
-            if (results.isEmpty()) {
-                metricsConfiguration.recordSearchError("federal_entity", "not_found");
-                throw new ZipCodeNotFoundException(
-                        "No se encontraron codigos postales para la entidad federativa: " + searchTerm
-                );
-            }
-
-            metricsConfiguration.recordResultSize("federal_entity", results.size());
-            return results;
-        } finally {
-            metricsConfiguration.recordSearchDuration(sample, "federal_entity");
-        }
-    }
-
-    /**
      * Búsqueda paginada por entidad federativa. Fix #8: ordena el conjunto
      * (vía índice invertido) y materializa sólo la página solicitada en vez
      * de la lista completa.
@@ -465,7 +208,7 @@ public class ZipCodeService {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
             metricsConfiguration.recordSearch("federal_entity");
-            validatePagination(page, size);
+            PaginationSupport.validatePagination(page, size);
             String normalizedSearchTerm = validateSearchTerm(searchTerm, "federal_entity");
 
             Set<ZipCode> matches = findCandidatesInIndex(zipCodesByNormalizedEntity, normalizedSearchTerm);
@@ -476,7 +219,7 @@ public class ZipCodeService {
                 );
             }
 
-            PagedResponse<ZipCode> response = paginateSorted(
+            PagedResponse<ZipCode> response = PaginationSupport.paginateSorted(
                     matches,
                     Comparator.comparing(ZipCode::getZipCode),
                     page,
@@ -490,35 +233,6 @@ public class ZipCodeService {
     }
 
     /**
-     * @deprecated Usar la variante paginada {@link #searchByMunicipality(String, int, int)}.
-     */
-    @Deprecated(forRemoval = false)
-    @Cacheable(value = "municipalitySearch", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#searchTerm)")
-    public List<ZipCode> searchByMunicipality(String searchTerm) {
-        Timer.Sample sample = metricsConfiguration.startTimer();
-        try {
-            metricsConfiguration.recordSearch("municipality");
-            String normalizedSearchTerm = validateSearchTerm(searchTerm, "municipality");
-
-            List<ZipCode> results = findOrderedCandidatesInIndex(
-                    zipCodesByNormalizedMunicipality,
-                    normalizedSearchTerm);
-
-            if (results.isEmpty()) {
-                metricsConfiguration.recordSearchError("municipality", "not_found");
-                throw new ZipCodeNotFoundException(
-                        "No se encontraron codigos postales para el municipio: " + searchTerm
-                );
-            }
-
-            metricsConfiguration.recordResultSize("municipality", results.size());
-            return results;
-        } finally {
-            metricsConfiguration.recordSearchDuration(sample, "municipality");
-        }
-    }
-
-    /**
      * Búsqueda paginada por municipio. Fix #8: idem entidad federativa.
      */
     @Cacheable(value = "municipalitySearchPaged", key = "T(com.coderalexis.CodigoPostalApi.util.Util).normalizeCacheKey(#searchTerm) + '_' + #page + '_' + #size")
@@ -526,7 +240,7 @@ public class ZipCodeService {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
             metricsConfiguration.recordSearch("municipality");
-            validatePagination(page, size);
+            PaginationSupport.validatePagination(page, size);
             String normalizedSearchTerm = validateSearchTerm(searchTerm, "municipality");
 
             Set<ZipCode> matches = findCandidatesInIndex(zipCodesByNormalizedMunicipality, normalizedSearchTerm);
@@ -537,7 +251,7 @@ public class ZipCodeService {
                 );
             }
 
-            PagedResponse<ZipCode> response = paginateSorted(
+            PagedResponse<ZipCode> response = PaginationSupport.paginateSorted(
                     matches,
                     Comparator.comparing(ZipCode::getZipCode),
                     page,
@@ -558,7 +272,8 @@ public class ZipCodeService {
     }
 
     /**
-     * Prefix search using ConcurrentSkipListMap.subMap() for O(log n + k) performance.
+     * Prefix search using the sorted {@link NavigableMap#subMap} for O(log n + k)
+     * performance.
      *
      * <p>Fix #5: la cache ahora se llava SÓLO por el prefijo normalizado. Para
      * cada prefijo cacheamos hasta {@link #PARTIAL_SEARCH_MAX_LIMIT} resultados
@@ -633,8 +348,10 @@ public class ZipCodeService {
 
     /**
      * Returns pre-computed federal entities list (calculated once at startup).
+     * No usa {@code @Cacheable}: el resultado ya es un campo inmutable en memoria,
+     * así que el proxy + lookup de caché sólo añadiría overhead y, además,
+     * impediría registrar métricas en los hits de caché.
      */
-    @Cacheable(value = "federalEntities")
     public List<FederalEntity> getAllFederalEntities() {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
@@ -687,40 +404,6 @@ public class ZipCodeService {
     }
 
     /**
-     * @deprecated Usar la variante paginada {@link #advancedSearch(AdvancedSearchRequest, int, int)}.
-     * Materializar toda la lista en cache puede tener un costo de memoria significativo.
-     */
-    @Deprecated(forRemoval = false)
-    @Cacheable(
-            value = "advancedSearch",
-            key = "#request.normalizedFilterCacheKey()",
-            // Fix #19: evita ocupar slot de cache con requests inválidos (null o
-            // todos los filtros vacíos) que terminarán en IllegalArgumentException.
-            condition = "#request != null && #request.hasAnyFilter()")
-    public List<ZipCode> advancedSearch(AdvancedSearchRequest request) {
-        Timer.Sample sample = metricsConfiguration.startTimer();
-        try {
-            AdvancedSearchCriteria criteria = validateAndNormalizeAdvancedSearchRequest(request);
-            Collection<ZipCode> candidates = resolveOrderedSearchCandidates(criteria);
-            Predicate<ZipCode> filter = zipCode -> matchesAdvancedCriteria(zipCode, criteria);
-
-            List<ZipCode> results = candidates.stream()
-                    .filter(filter)
-                    .collect(Collectors.toList());
-
-            if (results.isEmpty()) {
-                metricsConfiguration.recordSearchError("advanced", "not_found");
-                throw new ZipCodeNotFoundException("No se encontraron codigos postales con los criterios especificados");
-            }
-
-            metricsConfiguration.recordResultSize("advanced", results.size());
-            return results;
-        } finally {
-            metricsConfiguration.recordSearchDuration(sample, "advanced");
-        }
-    }
-
-    /**
      * Paginated advanced search that materializes only the requested page.
      * This keeps broad advanced searches from allocating all matching ZipCode
      * objects when clients only need one page.
@@ -732,11 +415,11 @@ public class ZipCodeService {
     public PagedResponse<ZipCode> advancedSearch(AdvancedSearchRequest request, int page, int size) {
         Timer.Sample sample = metricsConfiguration.startTimer();
         try {
-            validatePagination(page, size);
+            PaginationSupport.validatePagination(page, size);
             AdvancedSearchCriteria criteria = validateAndNormalizeAdvancedSearchRequest(request);
             Collection<ZipCode> candidates = resolveOrderedSearchCandidates(criteria);
 
-            PagedResponse<ZipCode> response = createPagedResponse(
+            PagedResponse<ZipCode> response = PaginationSupport.paginateFiltered(
                     candidates,
                     zipCode -> matchesAdvancedCriteria(zipCode, criteria),
                     page,
@@ -846,120 +529,6 @@ public class ZipCodeService {
             String normalizedZoneType) {
     }
 
-    /**
-     * Creates a paginated response from a list of results.
-     * Uses long arithmetic to prevent overflow when page * size exceeds Integer.MAX_VALUE.
-     */
-    public static <T> PagedResponse<T> createPagedResponse(List<T> allResults, int page, int size) {
-        validatePagination(page, size);
-
-        int totalElements = allResults.size();
-        int totalPages = calculateTotalPages(totalElements, size);
-        long offset = (long) page * size;
-
-        if (offset >= totalElements) {
-            return buildPagedResponse(List.of(), page, size, totalElements, totalPages);
-        }
-
-        int start = (int) offset; // Safe: offset < totalElements which is an int
-        int end = Math.min(start + size, totalElements);
-        return buildPagedResponse(allResults.subList(start, end), page, size, totalElements, totalPages);
-    }
-
-    /**
-     * Streaming pagination que ordena el conjunto candidato y materializa
-     * únicamente la página solicitada. Fix #8.
-     */
-    private static <T> PagedResponse<T> paginateSorted(
-            Set<T> candidates,
-            Comparator<T> comparator,
-            int page,
-            int size) {
-        validatePagination(page, size);
-
-        int totalElements = candidates.size();
-        int totalPages = calculateTotalPages(totalElements, size);
-        long offset = (long) page * size;
-
-        if (offset >= totalElements) {
-            return buildPagedResponse(List.of(), page, size, totalElements, totalPages);
-        }
-
-        int start = (int) offset;
-        int limit = Math.min(size, totalElements - start);
-        List<T> pageContent = candidates.stream()
-                .sorted(comparator)
-                .skip(start)
-                .limit(limit)
-                .toList();
-
-        return buildPagedResponse(pageContent, page, size, totalElements, totalPages);
-    }
-
-    /**
-     * Creates a paginated response from a collection without materializing the full
-     * filtered result set. The collection iteration order is preserved.
-     */
-    private static <T> PagedResponse<T> createPagedResponse(
-            Collection<T> candidates,
-            Predicate<T> filter,
-            int page,
-            int size) {
-        validatePagination(page, size);
-
-        long offset = (long) page * size;
-        List<T> pageContent = new ArrayList<>(size);
-        int totalElements = 0;
-
-        for (T candidate : candidates) {
-            if (!filter.test(candidate)) {
-                continue;
-            }
-
-            if (totalElements >= offset && pageContent.size() < size) {
-                pageContent.add(candidate);
-            }
-            totalElements++;
-        }
-
-        return buildPagedResponse(
-                pageContent,
-                page,
-                size,
-                totalElements,
-                calculateTotalPages(totalElements, size));
-    }
-
-    private static <T> PagedResponse<T> buildPagedResponse(
-            List<T> content,
-            int page,
-            int size,
-            int totalElements,
-            int totalPages) {
-        return PagedResponse.<T>builder()
-                .content(content)
-                .pageNumber(page)
-                .pageSize(size)
-                .totalElements(totalElements)
-                .totalPages(totalPages)
-                .first(page == 0)
-                .last(totalPages == 0 || page >= totalPages - 1)
-                .build();
-    }
-
-    private static int calculateTotalPages(int totalElements, int size) {
-        return totalElements == 0 ? 0 : (int) Math.ceil((double) totalElements / size);
-    }
-
-    private static void validatePagination(int page, int size) {
-        if (page < 0) {
-            throw new IllegalArgumentException("La pagina debe ser mayor o igual a 0");
-        }
-        if (size < 1) {
-            throw new IllegalArgumentException("El tamaño debe ser mayor a 0");
-        }
-    }
-
     private String validateSearchTerm(String searchTerm, String searchType) {
         if (searchTerm == null || searchTerm.trim().isEmpty()) {
             metricsConfiguration.recordSearchError(searchType, "empty_search");
@@ -997,23 +566,6 @@ public class ZipCodeService {
 
         // Fallback: full scan in deterministic zip-code order only when filtering by settlement/type/zone.
         return zipCodesSorted.values();
-    }
-
-    /**
-     * Devuelve todos los ZipCodes coincidentes (en orden ascendente por código
-     * postal) recorriendo el índice invertido. {@code distinct()} es defensivo:
-     * cada ZipCode aparece sólo bajo una clave por dimensión (porque cada CP
-     * tiene una sola entidad/municipio), así que en práctica nunca hay
-     * duplicados. Conservamos {@code distinct()} para que el contrato sea
-     * robusto si en el futuro se admiten múltiples valores por ZipCode.
-     */
-    private List<ZipCode> findOrderedCandidatesInIndex(Map<String, Set<ZipCode>> index, String normalizedSearchTerm) {
-        return index.entrySet().stream()
-                .filter(entry -> entry.getKey().contains(normalizedSearchTerm))
-                .flatMap(entry -> entry.getValue().stream())
-                .distinct()
-                .sorted(Comparator.comparing(ZipCode::getZipCode))
-                .toList();
     }
 
     private Set<ZipCode> findCandidatesInIndex(Map<String, Set<ZipCode>> index, String normalizedSearchTerm) {

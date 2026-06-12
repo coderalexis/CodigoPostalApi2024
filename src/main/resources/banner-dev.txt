@@ -1,0 +1,13 @@
+${AnsiColor.BRIGHT_GREEN}
+   ____          _ _                ____           _        _
+  / ___|___   __| (_) __ _  ___    |  _ \ ___  ___| |_ __ _| |
+ | |   / _ \ / _` | |/ _` |/ _ \   | |_) / _ \/ __| __/ _` | |
+ | |__| (_) | (_| | | (_| | (_) |  |  __/ (_) \__ \ || (_| | |
+  \____\___/ \__,_|_|\__, |\___/   |_|   \___/|___/\__\__,_|_|
+                     |___/
+${AnsiColor.BRIGHT_YELLOW}        API de Códigos Postales de México  ::  PERFIL DEV
+${AnsiColor.BRIGHT_BLACK} ----------------------------------------------------------------
+${AnsiColor.DEFAULT}  Spring Boot   : ${spring-boot.formatted-version}
+  Perfil activo : ${spring.profiles.active:default}
+  Swagger UI    : http://localhost:8080/swagger-ui.html
+${AnsiColor.RESET}
