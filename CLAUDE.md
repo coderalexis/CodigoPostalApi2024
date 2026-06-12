@@ -1,43 +1,43 @@
 # CLAUDE.md - Project Guidelines
 
 ## Project Overview
-High-performance REST API for querying Mexican postal codes (ZIP codes). Built with **Spring Boot 4.0.2** and **Java 25**. Data is loaded from SEPOMEX's `CPdescarga.txt` file into in-memory data structures at startup.
+High-performance REST API for querying Mexican postal codes (ZIP codes). Built with **Spring Boot 4.0.6** and **Java 25**. Data is loaded from SEPOMEX's `CPdescarga.txt` file into in-memory data structures at startup.
 
 ## Build & Run
 ```bash
 mvn clean package              # Build JAR
 mvn spring-boot:run            # Run with dev profile
-mvn test                       # Run all 33 tests (14 unit + 18 integration + 1 context)
+mvn test                       # Run all 66 tests (service + controller + rate-limit + health + context)
 mvn spring-boot:run -Dspring-boot.run.profiles=prod  # Run with production profile
 ```
 
 ## Architecture
 
 ### Data Flow
-1. **Startup**: `CPdescarga.txt` is loaded in `@PostConstruct`, parsed line-by-line, and indexed into multiple concurrent data structures
-2. **Indexing**: Four index structures for different access patterns:
-   - `ConcurrentHashMap<String, ZipCode>` - O(1) direct lookup by zip code
-   - `ConcurrentSkipListMap<String, ZipCode>` - O(log n) prefix search (autocomplete)
+1. **Startup**: `CPdescarga.txt` is loaded in `@PostConstruct`, parsed line-by-line, and indexed into multiple in-memory data structures. The load is **fail-fast**: if the catalog is missing or ends up empty, startup is aborted (`IllegalStateException`) instead of leaving a running-but-broken service.
+2. **Indexing**: Four index structures for different access patterns. They are populated sequentially during the single-threaded `@PostConstruct` and treated as **read-only after load**, so plain (non-concurrent) collections are used to avoid synchronization overhead on the hot read path:
+   - `HashMap<String, ZipCode>` - O(1) direct lookup by zip code
+   - `TreeMap<String, ZipCode>` (`NavigableMap`) - O(log n) prefix search (autocomplete) via `subMap()`
    - `Map<String, Set<ZipCode>>` - Inverted index by normalized federal entity
    - `Map<String, Set<ZipCode>>` - Inverted index by normalized municipality
-3. **Pre-computation**: Statistics and federal entities list are computed once at startup (immutable after load)
-4. **Caching**: 7 Caffeine cache regions with different TTLs per data type
-5. **Serving**: REST endpoints in `Controller.java` with pagination, validation, and Swagger docs
+3. **Pre-computation**: Statistics, federal entities list, and the municipalities-by-entity index are computed once at startup (immutable after load)
+4. **Caching**: 5 Spring-managed Caffeine cache regions (`zipcodes`, `federalEntitySearchPaged`, `municipalitySearchPaged`, `municipalitiesByEntity`, `advancedSearchPaged`) plus a manually-managed `partialPrefixCache` (Caffeine) inside `ZipCodeService` to sidestep Spring's self-invocation pitfall
+5. **Serving**: REST endpoints in `Controller.java` (contract in `ZipCodeApi` interface) with pagination, validation, and Swagger docs
 
 ### Key Design Decisions
 - **No database**: All data in memory (~200MB RAM) for sub-millisecond lookups
 - **Pre-computed normalized fields**: `ZipCode` stores `normalizedFederalEntity` and `normalizedMunicipality` (computed at load time) to avoid NFD normalization in hot search paths
-- **`@EqualsAndHashCode(of = "zipCode")`**: ZipCode identity is based solely on the zip code string, not the mutable settlements list. This is critical for correctness in the inverted index Sets
+- **`@EqualsAndHashCode(of = "zipCode")`**: ZipCode identity is based solely on the zip code string, not the settlements list. This is critical for correctness in the inverted index Sets (each ZipCode's `settlements` list is replaced with an immutable `List.copyOf(...)` after load, and `Settlements` itself is an immutable record)
 - **Sequential streams for small indices**: Federal entity index has ~32 entries, municipality ~2500. `parallelStream()` overhead exceeds benefit at these sizes
-- **`ConcurrentSkipListMap.subMap()`**: Prefix search uses sorted map range query instead of full scan
+- **`TreeMap.subMap()`**: Prefix search uses sorted map range query instead of full scan
 - **Low-cardinality metrics**: Search metrics use type tags (direct/federal_entity/municipality/partial) instead of per-zipcode counters to avoid Prometheus series explosion
 - **Caffeine for rate limit buckets**: Auto-eviction after 5 min of inactivity prevents memory leaks vs unbounded ConcurrentHashMap
 
 ### Project Structure
 ```
 src/main/java/com/coderalexis/CodigoPostalApi/
-  config/         # CacheConfiguration, MetricsConfiguration, RateLimitInterceptor, SwaggerConfiguration, CacheWarmupRunner, WebMvcConfiguration, RateLimitProperties
-  controller/     # Controller.java - all REST endpoints under /zip-codes
+  config/         # CacheConfiguration, CacheControlInterceptor, MetricsConfiguration, RateLimitInterceptor, SwaggerConfiguration, CacheWarmupRunner, WebMvcConfiguration, RateLimitProperties
+  controller/     # ZipCodeApi (REST contract + OpenAPI/validation) + Controller.java (implementation), all under /zip-codes
   exceptions/     # GlobalExceptionHandler, ZipCodeNotFoundException, ErrorResponse
   health/         # ZipCodeHealthIndicator
   model/          # ZipCode, Settlements, ZipCodeSimplified, FederalEntity, PagedResponse, ZipCodeStats, AdvancedSearchRequest
@@ -61,8 +61,8 @@ src/main/java/com/coderalexis/CodigoPostalApi/
 - JSON: snake_case via `@JsonProperty` annotations
 
 ## Performance Notes
-- Direct zip code lookup: O(1) HashMap + Caffeine cache
-- Partial/prefix search: O(log n + k) via ConcurrentSkipListMap.subMap()
+- Direct zip code lookup: O(1) HashMap (no cache: Map access is already O(1))
+- Partial/prefix search: O(log n + k) via TreeMap (NavigableMap) `subMap()`, results cached per-prefix in `partialPrefixCache`
 - Federal entity/municipality search: O(m) where m = matching index entries (not full scan)
 - Advanced search: Uses inverted indices as starting point, reduces candidate set before filtering
 - Statistics & federal entities: Pre-computed at startup, O(1) retrieval

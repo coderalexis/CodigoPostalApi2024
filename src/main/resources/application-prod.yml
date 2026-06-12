@@ -71,3 +71,11 @@ server:
     min-response-size: 512  # Comprimir respuestas > 512 bytes
   # Seguridad adicional
   shutdown: graceful  # Apagado graceful
+
+# Documentación OpenAPI deshabilitada en producción: no exponer el contrato ni el
+# Swagger UI públicamente. (SpringDoc los habilita por defecto y lo advierte en logs.)
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
