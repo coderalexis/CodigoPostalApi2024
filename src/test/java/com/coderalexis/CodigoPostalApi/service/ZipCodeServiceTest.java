@@ -300,4 +300,28 @@ class ZipCodeServiceTest {
         assertThrows(IllegalArgumentException.class, () -> zipCodeService.advancedSearch(request, 0, 0));
     }
 
+    @Test
+    @DisplayName("Debe exponer metadata de frescura del catálogo en las estadísticas")
+    void shouldExposeCatalogFreshnessMetadata() {
+        ZipCodeStats stats = zipCodeService.getStatistics();
+
+        assertNotNull(stats.getLoadedAt(), "Debe registrar cuándo se cargó el catálogo");
+        assertNotNull(stats.getCatalogChecksum(), "Debe exponer el checksum del catálogo");
+        assertTrue(stats.getCatalogChecksum().matches("[0-9a-f]{64}"),
+            "El checksum debe ser un SHA-256 en hexadecimal");
+        assertNotNull(stats.getCatalogSource(), "Debe exponer el origen del catálogo");
+        assertFalse(stats.getCatalogSource().isBlank());
+    }
+
+    @Test
+    @DisplayName("Debe canonizar los Strings repetidos de baja cardinalidad")
+    void shouldCanonicalizeRepeatedEntityStrings() {
+        PagedResponse<ZipCode> page = zipCodeService.searchByFederalEntity("Ciudad de México", 0, 2);
+        List<ZipCode> content = page.getContent();
+
+        assertTrue(content.size() >= 2, "Se necesitan al menos 2 CP de la misma entidad");
+        assertSame(content.get(0).getFederalEntity(), content.get(1).getFederalEntity(),
+            "Los CP de la misma entidad deben compartir la instancia canónica de federalEntity");
+    }
+
 }

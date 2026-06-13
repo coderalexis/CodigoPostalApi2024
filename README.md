@@ -244,9 +244,15 @@ curl "http://localhost:8080/zip-codes/advanced?federal_entity=jalisco&municipali
   "totalZipCodes": 31918,
   "totalFederalEntities": 32,
   "totalMunicipalities": 2337,
-  "totalSettlements": 157424
+  "totalSettlements": 157424,
+  "loadedAt": "2026-06-13T10:15:30",
+  "catalogChecksum": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  "catalogSource": "classpath:CPdescarga.txt"
 }
 ```
+
+The `catalogChecksum` (SHA-256 of the source catalog) and `loadedAt`/`catalogSource`
+let you verify which version of the SEPOMEX catalog the running instance is serving.
 
 ### Interactive Documentation
 
@@ -373,10 +379,15 @@ mvn test jacoco:report
 
 ### Test Coverage
 
-- **Total tests:** 33
-- **Unit tests:** 14 (ZipCodeServiceTest)
-- **Integration tests:** 18 (ControllerTest)
-- **Application test:** 1
+- **Total tests:** 70
+- **Service tests:** 25 (ZipCodeServiceTest)
+- **Controller/integration tests:** 34 (ControllerTest)
+- **Rate-limit tests:** 7 (RateLimitInterceptorTest)
+- **Health indicator tests:** 3 (ZipCodeHealthIndicatorTest)
+- **Application context test:** 1
+
+Tests run automatically on every push and pull request via GitHub Actions
+(`.github/workflows/ci.yml`).
 
 ## Performance
 

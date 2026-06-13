@@ -7,7 +7,7 @@ High-performance REST API for querying Mexican postal codes (ZIP codes). Built w
 ```bash
 mvn clean package              # Build JAR
 mvn spring-boot:run            # Run with dev profile
-mvn test                       # Run all 66 tests (service + controller + rate-limit + health + context)
+mvn test                       # Run all 70 tests (service + controller + rate-limit + health + context)
 mvn spring-boot:run -Dspring-boot.run.profiles=prod  # Run with production profile
 ```
 
@@ -20,7 +20,7 @@ mvn spring-boot:run -Dspring-boot.run.profiles=prod  # Run with production profi
    - `TreeMap<String, ZipCode>` (`NavigableMap`) - O(log n) prefix search (autocomplete) via `subMap()`
    - `Map<String, Set<ZipCode>>` - Inverted index by normalized federal entity
    - `Map<String, Set<ZipCode>>` - Inverted index by normalized municipality
-3. **Pre-computation**: Statistics, federal entities list, and the municipalities-by-entity index are computed once at startup (immutable after load)
+3. **Pre-computation**: Statistics, federal entities list, and the municipalities-by-entity index are computed once at startup (immutable after load). A SHA-256 checksum of the source catalog is computed in the same read pass and exposed via `/zip-codes/stats` (`catalogChecksum`/`catalogSource`/`loadedAt`) for data-freshness visibility.
 4. **Caching**: 5 Spring-managed Caffeine cache regions (`zipcodes`, `federalEntitySearchPaged`, `municipalitySearchPaged`, `municipalitiesByEntity`, `advancedSearchPaged`) plus a manually-managed `partialPrefixCache` (Caffeine) inside `ZipCodeService` to sidestep Spring's self-invocation pitfall
 5. **Serving**: REST endpoints in `Controller.java` (contract in `ZipCodeApi` interface) with pagination, validation, and Swagger docs
 
@@ -32,6 +32,8 @@ mvn spring-boot:run -Dspring-boot.run.profiles=prod  # Run with production profi
 - **`TreeMap.subMap()`**: Prefix search uses sorted map range query instead of full scan
 - **Low-cardinality metrics**: Search metrics use type tags (direct/federal_entity/municipality/partial) instead of per-zipcode counters to avoid Prometheus series explosion
 - **Caffeine for rate limit buckets**: Auto-eviction after 5 min of inactivity prevents memory leaks vs unbounded ConcurrentHashMap
+- **Canonical String pool at load**: low-cardinality fields (federal entity ~32, municipality ~2500, settlement/zone types) are deduplicated during parsing so the ~145k `ZipCode` objects share single String instances, cutting heap footprint
+- **Liveness/Readiness probes**: Actuator health groups (`/actuator/health/liveness` and `/readiness`); the `zipCode` indicator feeds the readiness group so traffic is only routed once the catalog is loaded
 
 ### Project Structure
 ```

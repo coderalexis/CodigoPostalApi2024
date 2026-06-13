@@ -19,6 +19,7 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -135,7 +136,7 @@ public class ZipCodeService {
         this.zipCodesByNormalizedEntity = data.byNormalizedEntity();
         this.zipCodesByNormalizedMunicipality = data.byNormalizedMunicipality();
 
-        buildPreComputedData();
+        buildPreComputedData(data.checksum(), data.source(), LocalDateTime.now());
 
         // Fix #2: marcamos dataLoaded sólo DESPUÉS de que las estructuras
         // precomputadas (cachedStats, cachedFederalEntities,
@@ -143,7 +144,7 @@ public class ZipCodeService {
         dataLoaded = true;
     }
 
-    private void buildPreComputedData() {
+    private void buildPreComputedData(String catalogChecksum, String catalogSource, LocalDateTime loadedAt) {
         // Single pass (#10): durante esta pasada acumulamos totalSettlements y la
         // lista de FederalEntity para evitar recorrer el mapa varias veces.
         long totalSettlements = 0L;
@@ -167,6 +168,9 @@ public class ZipCodeService {
                 .totalFederalEntities(zipCodesByNormalizedEntity.size())
                 .totalMunicipalities(zipCodesByNormalizedMunicipality.size())
                 .totalSettlements(totalSettlements)
+                .loadedAt(loadedAt)
+                .catalogChecksum(catalogChecksum)
+                .catalogSource(catalogSource)
                 .build();
 
         cachedFederalEntities = zipCodesByEntity.entrySet().stream()

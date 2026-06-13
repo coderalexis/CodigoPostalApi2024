@@ -18,9 +18,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
@@ -38,6 +42,10 @@ import java.util.regex.Pattern;
  * primero se acumulan los asentamientos de cada código postal en una estructura
  * temporal y luego se construye el objeto definitivo, evitando exponer estado
  * mutable.</p>
+ *
+ * <p>Durante la lectura se calcula, en una sola pasada, un checksum SHA-256 del
+ * archivo (frescura de datos) y se canonizan los Strings de baja cardinalidad
+ * (entidad, municipio, localidad, tipos) para reducir el footprint de memoria.</p>
  */
 @Slf4j
 @Component
@@ -68,21 +76,23 @@ public class SepomexZipCodeLoader {
     private int errorCount = 0;
 
     /**
-     * Carga el catálogo y devuelve las cuatro estructuras de índice ya construidas.
+     * Carga el catálogo y devuelve las cuatro estructuras de índice ya construidas,
+     * junto con la metadata de frescura (checksum y origen).
      *
-     * @return los índices, o {@code null} si no se pudo localizar ningún archivo.
+     * @return los índices + metadata, o {@code null} si no se pudo localizar ningún archivo.
      * @throws IOException si ocurre un error de lectura sobre un origen existente.
      */
     public ZipCodeData load() throws IOException {
-        try (InputStream stream = getInputStream()) {
-            if (stream == null) {
-                return null;
-            }
-            return parse(stream);
+        ResolvedSource resolved = resolveSource();
+        if (resolved == null) {
+            return null;
+        }
+        try (InputStream stream = resolved.stream()) {
+            return parse(stream, resolved.description());
         }
     }
 
-    private ZipCodeData parse(InputStream stream) throws IOException {
+    private ZipCodeData parse(InputStream stream, String source) throws IOException {
         long startTime = System.currentTimeMillis();
         errorCount = 0;
 
@@ -90,22 +100,29 @@ public class SepomexZipCodeLoader {
         Charset charset = detectCharset(bufferedStream);
         log.info("Encoding detectado: {}", charset.name());
 
-        // Estructura temporal mutable: acumula los asentamientos por código postal
-        // antes de materializar el ZipCode inmutable.
+        MessageDigest digest = newSha256();
+        // Se envuelve DESPUÉS de detectCharset (que hace mark/reset sobre los primeros
+        // bytes), de modo que cada byte del archivo se digiere exactamente una vez.
+        DigestInputStream digestStream = new DigestInputStream(bufferedStream, digest);
+
+        // Estructuras temporales mutables: acumulan asentamientos por CP y canonizan
+        // los Strings repetidos. Ambas se descartan al terminar el parseo.
         Map<String, Accumulator> accumulators = new HashMap<>();
+        Map<String, String> stringPool = new HashMap<>();
 
         try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(bufferedStream, charset))) {
+                new InputStreamReader(digestStream, charset))) {
 
             // Skip first two lines (metadata and header)
             reader.readLine();
             reader.readLine();
 
             long linesProcessed = reader.lines()
-                    .filter(line -> processLine(line, accumulators))
+                    .filter(line -> processLine(line, accumulators, stringPool))
                     .count();
 
-            ZipCodeData data = buildIndices(accumulators);
+            String checksum = HexFormat.of().formatHex(digest.digest());
+            ZipCodeData data = buildIndices(accumulators, checksum, source);
 
             long duration = System.currentTimeMillis() - startTime;
             log.info("Datos cargados exitosamente en {}ms", duration);
@@ -113,6 +130,7 @@ public class SepomexZipCodeLoader {
             log.info("  - Entidades federativas: {}", data.byNormalizedEntity().size());
             log.info("  - Municipios: {}", data.byNormalizedMunicipality().size());
             log.info("  - Lineas procesadas: {}", linesProcessed);
+            log.info("  - Origen: {} | checksum SHA-256: {}", source, checksum);
             if (errorCount > 0) {
                 log.warn("  - Lineas con errores: {}", errorCount);
             }
@@ -121,7 +139,7 @@ public class SepomexZipCodeLoader {
         }
     }
 
-    private ZipCodeData buildIndices(Map<String, Accumulator> accumulators) {
+    private ZipCodeData buildIndices(Map<String, Accumulator> accumulators, String checksum, String source) {
         Map<String, ZipCode> byCode = new HashMap<>(accumulators.size() * 2);
         NavigableMap<String, ZipCode> sorted = new TreeMap<>();
         Map<String, Set<ZipCode>> byNormalizedEntity = new HashMap<>();
@@ -140,18 +158,18 @@ public class SepomexZipCodeLoader {
                     .add(zipCode);
         }
 
-        return new ZipCodeData(byCode, sorted, byNormalizedEntity, byNormalizedMunicipality);
+        return new ZipCodeData(byCode, sorted, byNormalizedEntity, byNormalizedMunicipality, checksum, source);
     }
 
     /**
-     * Resuelve el InputStream del catálogo SEPOMEX.
+     * Resuelve el origen del catálogo SEPOMEX (stream + descripción legible).
      *
      * <p>Fix #20: si el usuario configura un path explícito (vía
      * {@code zipcode.file.path}) y éste no existe, fallamos rápido en vez de
      * caer silenciosamente al recurso interno, que enmascaraba problemas de
      * despliegue (config incorrecta sin error visible).</p>
      */
-    private InputStream getInputStream() throws IOException {
+    private ResolvedSource resolveSource() throws IOException {
         boolean userConfiguredPath = filePath != null && !filePath.isBlank();
 
         if (userConfiguredPath && filePath.startsWith("classpath:")) {
@@ -159,7 +177,7 @@ public class SepomexZipCodeLoader {
             ClassPathResource resource = new ClassPathResource(resourcePath);
             if (resource.exists()) {
                 log.info("Cargando codigos postales desde classpath: {}", resourcePath);
-                return resource.getInputStream();
+                return new ResolvedSource(resource.getInputStream(), "classpath:" + resourcePath);
             }
             throw new IOException(
                 "Recurso configurado en 'zipcode.file.path' no encontrado en classpath: " + resourcePath);
@@ -169,7 +187,7 @@ public class SepomexZipCodeLoader {
             Path path = Paths.get(filePath);
             if (Files.exists(path)) {
                 log.info("Cargando codigos postales desde {}", filePath);
-                return Files.newInputStream(path);
+                return new ResolvedSource(Files.newInputStream(path), path.toString());
             }
             throw new IOException(
                 "Archivo configurado en 'zipcode.file.path' no encontrado: " + filePath);
@@ -178,7 +196,7 @@ public class SepomexZipCodeLoader {
         ClassPathResource resource = new ClassPathResource(RESOURCE_FILE);
         if (resource.exists()) {
             log.info("Cargando codigos postales desde recurso interno {}", RESOURCE_FILE);
-            return resource.getInputStream();
+            return new ResolvedSource(resource.getInputStream(), "classpath:" + RESOURCE_FILE);
         }
 
         return null;
@@ -223,7 +241,7 @@ public class SepomexZipCodeLoader {
         return StandardCharsets.ISO_8859_1;
     }
 
-    private boolean processLine(String line, Map<String, Accumulator> accumulators) {
+    private boolean processLine(String line, Map<String, Accumulator> accumulators, Map<String, String> pool) {
         try {
             String[] words = PIPE_PATTERN.split(line);
 
@@ -251,14 +269,15 @@ public class SepomexZipCodeLoader {
             String municipality = words[COL_MUNICIPALITY].trim();
 
             // El primer registro de un código postal fija entidad/municipio/localidad;
-            // los siguientes sólo añaden asentamientos.
+            // los siguientes sólo añaden asentamientos. Los Strings de baja cardinalidad
+            // se canonizan (#4) para que las ~145k entradas compartan las mismas instancias.
             Accumulator acc = accumulators.computeIfAbsent(zipCodeKey, k -> new Accumulator(
                     k,
-                    words[COL_LOCALITY].trim(),
-                    federalEntity,
-                    municipality,
-                    Util.normalizeString(federalEntity),
-                    Util.normalizeString(municipality)));
+                    canonical(words[COL_LOCALITY].trim(), pool),
+                    canonical(federalEntity, pool),
+                    canonical(municipality, pool),
+                    canonical(Util.normalizeString(federalEntity), pool),
+                    canonical(Util.normalizeString(municipality), pool)));
 
             String settlementName = words[COL_SETTLEMENT_NAME].trim();
             String settlementTypeVal = words[COL_SETTLEMENT_TYPE].trim();
@@ -266,13 +285,15 @@ public class SepomexZipCodeLoader {
                 words[COL_ZONE_TYPE_INDEX].trim() : "";
 
             // Fix #18: Settlements es un record inmutable con los campos normalizados precomputados.
+            // El nombre del asentamiento es de alta cardinalidad y no se canoniza; el tipo de
+            // asentamiento y el tipo de zona sí (apenas unas decenas de valores distintos).
             acc.settlements.add(new Settlements(
                     settlementName,
-                    zoneTypeVal,
-                    settlementTypeVal,
+                    canonical(zoneTypeVal, pool),
+                    canonical(settlementTypeVal, pool),
                     Util.normalizeString(settlementName),
-                    Util.normalizeString(settlementTypeVal),
-                    Util.normalizeString(zoneTypeVal)));
+                    canonical(Util.normalizeString(settlementTypeVal), pool),
+                    canonical(Util.normalizeString(zoneTypeVal), pool)));
 
             return true;
 
@@ -281,6 +302,26 @@ public class SepomexZipCodeLoader {
                 line.substring(0, Math.min(100, line.length())));
             log.debug("Detalle del error:", e);
             return false;
+        }
+    }
+
+    /**
+     * Devuelve la instancia canónica del String dado, de modo que valores
+     * repetidos (entidad, municipio, tipos) compartan un único objeto en memoria.
+     */
+    private static String canonical(String value, Map<String, String> pool) {
+        if (value == null) {
+            return null;
+        }
+        return pool.computeIfAbsent(value, k -> k);
+    }
+
+    private MessageDigest newSha256() throws IOException {
+        try {
+            return MessageDigest.getInstance("SHA-256");
+        } catch (NoSuchAlgorithmException e) {
+            // SHA-256 es obligatorio en toda JVM; si faltara, el entorno está roto.
+            throw new IOException("Algoritmo SHA-256 no disponible en la JVM", e);
         }
     }
 
@@ -295,6 +336,13 @@ public class SepomexZipCodeLoader {
 
     private boolean isValidZipCode(String zipCode) {
         return zipCode != null && ZIP_CODE_PATTERN.matcher(zipCode).matches();
+    }
+
+    /**
+     * Origen resuelto del catálogo: el stream a leer y una descripción legible
+     * (classpath:... o ruta de archivo) para exponer como metadata de frescura.
+     */
+    private record ResolvedSource(InputStream stream, String description) {
     }
 
     /**
