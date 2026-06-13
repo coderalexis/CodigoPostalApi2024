@@ -18,10 +18,16 @@ import java.util.Set;
  *   <li>{@code byNormalizedEntity} - índice invertido por entidad federativa normalizada</li>
  *   <li>{@code byNormalizedMunicipality} - índice invertido por municipio normalizado</li>
  * </ul>
+ *
+ * <p>Incluye además metadata de frescura: {@code checksum} (SHA-256 del archivo
+ * fuente) y {@code source} (origen legible), para exponer qué versión del
+ * catálogo está sirviendo la API.</p>
  */
 public record ZipCodeData(
         Map<String, ZipCode> byCode,
         NavigableMap<String, ZipCode> sorted,
         Map<String, Set<ZipCode>> byNormalizedEntity,
-        Map<String, Set<ZipCode>> byNormalizedMunicipality) {
+        Map<String, Set<ZipCode>> byNormalizedMunicipality,
+        String checksum,
+        String source) {
 }

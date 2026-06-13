@@ -393,4 +393,23 @@ class ControllerTest {
                 .andExpect(status().isNotFound())
                 .andExpect(header().doesNotExist("Cache-Control"));
     }
+
+    @Test
+    @DisplayName("GET /zip-codes/stats - Debe exponer metadata de frescura del catálogo")
+    void shouldExposeCatalogFreshnessInStats() throws Exception {
+        mockMvc.perform(get("/zip-codes/stats")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.catalogChecksum").exists())
+                .andExpect(jsonPath("$.catalogSource").exists())
+                .andExpect(jsonPath("$.loadedAt").exists());
+    }
+
+    @Test
+    @DisplayName("GET /actuator/health/readiness - Debe reportar UP con el catálogo cargado")
+    void shouldReportReadinessUp() throws Exception {
+        mockMvc.perform(get("/actuator/health/readiness"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("UP"));
+    }
 }

@@ -55,6 +55,16 @@ management:
     health:
       show-details: when-authorized
       show-components: when-authorized
+      # Liveness/Readiness diferenciadas para orquestadores (Railway/k8s):
+      # - liveness: el proceso está vivo (no reiniciar por falta de datos).
+      # - readiness: el catálogo está cargado; hasta entonces no se enruta tráfico.
+      probes:
+        enabled: true
+      group:
+        liveness:
+          include: livenessState
+        readiness:
+          include: readinessState,zipCode
     prometheus:
       enabled: true
     info:
