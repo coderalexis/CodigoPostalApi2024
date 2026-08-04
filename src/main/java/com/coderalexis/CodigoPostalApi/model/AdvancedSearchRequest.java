@@ -42,23 +42,31 @@ public class AdvancedSearchRequest {
 
     /**
      * Cache key estable basada exclusivamente en los filtros normalizados.
-     * Por diseño no incluye paginación ni formato porque ambos se aplican a
-     * posteriori sobre el conjunto de resultados.
+     * Por diseño no incluye paginación ni formato: ambos se aplican a posteriori
+     * sobre la lista completa de resultados que guarda el cache.
+     *
+     * <p>El delimitador se escapa dentro de cada valor: sin esto,
+     * {@code federal_entity="x|y"} colisionaría con
+     * {@code federal_entity="x", municipality="y"} y un request podría recibir
+     * la lista cacheada del otro.</p>
      */
     public String normalizedFilterCacheKey() {
         return String.join("|",
-                Util.normalizeCacheKey(federalEntity),
-                Util.normalizeCacheKey(municipality),
-                Util.normalizeCacheKey(settlement),
-                Util.normalizeCacheKey(settlementType),
-                Util.normalizeCacheKey(zoneType));
+                escapeDelimiter(Util.normalizeCacheKey(federalEntity)),
+                escapeDelimiter(Util.normalizeCacheKey(municipality)),
+                escapeDelimiter(Util.normalizeCacheKey(settlement)),
+                escapeDelimiter(Util.normalizeCacheKey(settlementType)),
+                escapeDelimiter(Util.normalizeCacheKey(zoneType)));
+    }
+
+    private static String escapeDelimiter(String value) {
+        return value.replace("\\", "\\\\").replace("|", "\\|");
     }
 
     /**
-     * Indica si el request tiene al menos un filtro útil. Usado por las
-     * condiciones SpEL de {@code @Cacheable} para evitar entrar al cache con
-     * requests inválidos que de todas formas terminarán en
-     * IllegalArgumentException (#19).
+     * Indica si el request tiene al menos un filtro útil. Es la validación que
+     * usa el servicio antes de tocar el cache: sin ningún filtro la búsqueda
+     * avanzada no tiene sentido y termina en IllegalArgumentException (#19).
      */
     public boolean hasAnyFilter() {
         return notBlank(federalEntity)

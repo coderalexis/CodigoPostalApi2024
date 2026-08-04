@@ -38,12 +38,16 @@ ratelimit:
   ip-based: true
   burst-capacity: 15
 
-# Actuator - solo health y prometheus en el mismo puerto
+# Actuator: Railway sirve UN solo puerto público, así que todo lo expuesto aquí
+# queda accesible desde internet sin autenticación. Por defecto sólo health
+# (necesario para el healthcheck de Railway); /actuator/prometheus quedaba
+# público sin auth. Si se scrapea vía red privada de Railway, restaurar con la
+# variable de entorno ACTUATOR_EXPOSURE=health,prometheus,info
 management:
   endpoints:
     web:
       exposure:
-        include: health,prometheus,info
+        include: ${ACTUATOR_EXPOSURE:health}
   endpoint:
     health:
       show-details: never

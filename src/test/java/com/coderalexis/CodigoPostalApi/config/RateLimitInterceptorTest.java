@@ -115,6 +115,36 @@ class RateLimitInterceptorTest {
     }
 
     @Test
+    @DisplayName("Burst no configurado: la capacidad efectiva es requests-per-minute")
+    void shouldDefaultBurstToRequestsPerMinute() throws Exception {
+        RateLimitProperties props = new RateLimitProperties();
+        props.setEnabled(true);
+        props.setRequestsPerMinute(3);
+        // burstCapacity se queda en 0 = "no configurado"
+        assertEquals(3, props.getEffectiveBurstCapacity(),
+                "Sin burst configurado, la capacidad debe igualar la tasa por minuto");
+
+        RateLimitInterceptor limited = new RateLimitInterceptor(props);
+        MockHttpServletRequest request = new MockHttpServletRequest("GET", "/zip-codes/01000");
+        request.setRemoteAddr("198.51.100.20");
+
+        // Las 3 primeras pasan (capacidad efectiva = 3, no el viejo default de 20... ni 0).
+        for (int i = 0; i < 3; i++) {
+            MockHttpServletResponse response = new MockHttpServletResponse();
+            assertTrue(limited.preHandle(request, response, new Object()),
+                    "Las peticiones dentro de la capacidad efectiva deben pasar (iteración " + i + ")");
+            assertEquals("3", response.getHeader("X-RateLimit-Burst"),
+                    "El header X-RateLimit-Burst debe exponer la capacidad real del bucket");
+        }
+
+        // La cuarta excede la capacidad → 429 y también lleva el header Burst.
+        MockHttpServletResponse blocked = new MockHttpServletResponse();
+        assertFalse(limited.preHandle(request, blocked, new Object()));
+        assertEquals(HttpStatus.TOO_MANY_REQUESTS.value(), blocked.getStatus());
+        assertEquals("3", blocked.getHeader("X-RateLimit-Burst"));
+    }
+
+    @Test
     @DisplayName("preHandle aísla buckets entre IPs cuando ip-based=true")
     void shouldIsolateBucketsBetweenClients() throws Exception {
         RateLimitProperties props = new RateLimitProperties();

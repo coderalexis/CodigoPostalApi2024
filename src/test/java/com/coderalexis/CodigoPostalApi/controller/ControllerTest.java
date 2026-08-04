@@ -11,8 +11,13 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
+import org.springframework.test.web.servlet.MvcResult;
+
 import static org.hamcrest.Matchers.*;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @SpringBootTest
@@ -411,5 +416,85 @@ class ControllerTest {
         mockMvc.perform(get("/actuator/health/readiness"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("UP"));
+    }
+
+    // ============================================================
+    // Manejo de errores HTTP: parámetro faltante, tipo inválido, 405
+    // ============================================================
+
+    @Test
+    @DisplayName("GET /zip-codes sin federal_entity - Debe retornar 400 (no 500)")
+    void shouldReturn400ForMissingRequiredParameter() throws Exception {
+        mockMvc.perform(get("/zip-codes")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.message", containsString("Falta el parámetro requerido: federal_entity")))
+                .andExpect(jsonPath("$.path", containsString("/zip-codes")));
+    }
+
+    @Test
+    @DisplayName("GET /zip-codes?page=abc - Debe retornar 400 por tipo inválido")
+    void shouldReturn400ForTypeMismatch() throws Exception {
+        mockMvc.perform(get("/zip-codes")
+                .param("federal_entity", "Jalisco")
+                .param("page", "abc")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.message", containsString("Valor inválido para el parámetro 'page'")));
+    }
+
+    @Test
+    @DisplayName("POST /zip-codes/stats - Debe retornar 405 con header Allow")
+    void shouldReturn405ForUnsupportedMethod() throws Exception {
+        mockMvc.perform(post("/zip-codes/stats")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isMethodNotAllowed())
+                .andExpect(header().exists("Allow"))
+                .andExpect(jsonPath("$.status").value(405))
+                .andExpect(jsonPath("$.message", containsString("no soportado")));
+    }
+
+    @Test
+    @DisplayName("Errores de validación: message describe el error y path contiene la URI")
+    void shouldPutValidationErrorsInMessageAndUriInPath() throws Exception {
+        mockMvc.perform(get("/zip-codes")
+                .param("federal_entity", "méxico")
+                .param("size", "150")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message", containsString("Errores de validación")))
+                .andExpect(jsonPath("$.path", containsString("/zip-codes")));
+    }
+
+    // ============================================================
+    // ETag versionado por catálogo / 304 Not Modified
+    // ============================================================
+
+    @Test
+    @DisplayName("Las respuestas GET deben llevar ETag y honrar If-None-Match con 304")
+    void shouldReturnEtagAndHonorIfNoneMatch() throws Exception {
+        MvcResult result = mockMvc.perform(get("/zip-codes/01000")
+                .contentType(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(header().exists("ETag"))
+                .andReturn();
+
+        String etag = result.getResponse().getHeader("ETag");
+        assertNotNull(etag);
+        assertTrue(etag.startsWith("W/\""), "El ETag debe ser débil (W/) por la compresión");
+
+        // Mismo validador -> 304 sin cuerpo (la búsqueda ni siquiera se ejecuta).
+        mockMvc.perform(get("/zip-codes/01000")
+                .header("If-None-Match", etag))
+                .andExpect(status().isNotModified())
+                .andExpect(content().string(""));
+
+        // Validador de otra versión del catálogo -> respuesta completa.
+        mockMvc.perform(get("/zip-codes/01000")
+                .header("If-None-Match", "W/\"otro-catalogo-0\""))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.zip_code").value("01000"));
     }
 }

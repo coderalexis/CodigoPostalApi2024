@@ -317,29 +317,58 @@ SPRING_PROFILES_ACTIVE=railway
 
 Rate limit buckets use Caffeine cache with automatic eviction after 5 minutes of inactivity, preventing memory leaks.
 
+If `burst-capacity` is not configured, the effective bucket capacity equals `requests-per-minute` (the bucket can hold as many tokens as the advertised sustained rate).
+
 ### Response Headers
 
 ```
-X-RateLimit-Limit: 100
-X-RateLimit-Remaining: 87
-X-RateLimit-Retry-After-Seconds: 60
+X-RateLimit-Limit: 100                 # Sustained rate (tokens refilled per minute)
+X-RateLimit-Burst: 20                  # Real bucket capacity (upper bound of Remaining)
+X-RateLimit-Remaining: 17
+X-RateLimit-Retry-After-Seconds: 60    # Only on 429 responses
 ```
 
 ## Caching
 
 ### Multi-Level Cache Strategy
 
-| Cache Name | Capacity | TTL | Use Case |
-|------------|----------|-----|----------|
-| `zipcodes` | 10,000 | 1 hour | Individual zip code lookups |
-| `federalEntitySearch` | 100 | 15 min | State-based searches |
-| `municipalitySearch` | 200 | 15 min | Municipality searches |
-| `partialSearch` | 500 | 10 min | Autocomplete searches |
-| `federalEntities` | 1 | 1 hour | States list |
-| `municipalitiesByEntity` | 50 | 30 min | Municipalities by state |
-| `advancedSearch` | 100 | 10 min | Multi-filter searches |
+Search caches are managed directly with Caffeine inside `ZipCodeService` (avoids Spring's
+self-invocation trap, gives per-key locking against cache stampedes, and enables
+**negative caching**: terms with no results are cached too, so repeated not-found
+queries never re-scan the indices — the 404 is still raised on every request).
 
-Cache warmup runs in parallel at startup for common queries.
+Entity/municipality/advanced caches are keyed **by normalized term only** (not by page):
+they store the full sorted result list and pagination is a cheap `subList`, so browsing
+pages of the same term never re-computes or re-sorts anything.
+
+| Cache | Managed by | Capacity | TTL | Use Case |
+|------------|-----------|----------|-----|----------|
+| `partialPrefix` | Caffeine (service) | 500 terms | 10 min (write) | Autocomplete prefix searches |
+| `federalEntitySearch` | Caffeine (service) | 200 terms | 30 min (access) | Full sorted list per state term |
+| `municipalitySearch` | Caffeine (service) | 200 terms | 30 min (access) | Full sorted list per municipality term |
+| `advancedSearch` | Caffeine (service) | 500K refs (weight) | 15 min (access) | Full filtered list per filter combination |
+| `municipalitiesByEntity` | Spring `@Cacheable` | 50 | 30 min (write) | Municipality names by state |
+
+All caches (manual and Spring-managed) are wired to Micrometer via `CaffeineCacheMetrics`,
+so hit ratios and evictions are visible in Prometheus (`cache_gets_total{cache="..."}`).
+
+Cache warmup runs in parallel at startup for common queries; since search caches are
+keyed by term, warming a term benefits every page and page size of that term.
+
+### HTTP Caching (ETag / 304)
+
+Every `GET /zip-codes/**` response carries a weak `ETag` derived from the catalog's
+SHA-256 checksum plus the app version. Clients (and CDNs) can revalidate with
+`If-None-Match`: a match short-circuits **before** the handler runs and returns
+`304 Not Modified` with no body — no search, no JSON serialization. The validator only
+changes when the catalog file or the application version changes.
+
+```bash
+curl -si http://localhost:8080/zip-codes/01000 | grep ETag
+# ETag: W/"3f6c2a9b8d41e07a-3.0.0-SNAPSHOT"
+curl -si -H 'If-None-Match: W/"3f6c2a9b8d41e07a-3.0.0-SNAPSHOT"' http://localhost:8080/zip-codes/01000
+# HTTP/1.1 304 Not Modified
+```
 
 ## Monitoring and Metrics
 
@@ -379,15 +408,19 @@ mvn test jacoco:report
 
 ### Test Coverage
 
-- **Total tests:** 70
-- **Service tests:** 25 (ZipCodeServiceTest)
-- **Controller/integration tests:** 34 (ControllerTest)
-- **Rate-limit tests:** 7 (RateLimitInterceptorTest)
+- **Total tests:** 80
+- **Service tests:** 29 (ZipCodeServiceTest — includes negative caching, page consistency and cache-hit metrics)
+- **Controller/integration tests:** 39 (ControllerTest — includes 400/405 error mapping and ETag/304)
+- **Rate-limit tests:** 8 (RateLimitInterceptorTest)
 - **Health indicator tests:** 3 (ZipCodeHealthIndicatorTest)
 - **Application context test:** 1
 
+The JaCoCo HTML report is generated at `target/site/jacoco/index.html` (also produced by
+`mvn verify` and uploaded as a CI artifact).
+
 Tests run automatically on every push and pull request via GitHub Actions
-(`.github/workflows/ci.yml`).
+(`.github/workflows/ci.yml`), which also builds the Docker image (including the CDS
+training run) to catch Dockerfile regressions.
 
 ## Performance
 
@@ -395,19 +428,27 @@ Tests run automatically on every push and pull request via GitHub Actions
 
 | Operation | Complexity | Data Structure |
 |-----------|-----------|----------------|
-| Direct zip code lookup | O(1) | ConcurrentHashMap |
-| Prefix/autocomplete search | O(log n + k) | ConcurrentSkipListMap.subMap() |
-| Federal entity search | O(m) | Inverted index (32 entries) |
-| Municipality search | O(m) | Inverted index (~2500 entries) |
-| Advanced search | O(candidates) | Inverted index as starting point |
+| Direct zip code lookup | O(1) | HashMap |
+| Prefix/autocomplete search | O(log n + k) | TreeMap (NavigableMap) `subMap()` |
+| Federal entity search | O(m) on miss, O(page) on hit | Inverted index (32 pre-sorted buckets) + term-keyed cache |
+| Municipality search | O(m) on miss, O(page) on hit | Inverted index (~2500 pre-sorted buckets) + term-keyed cache |
+| Advanced search | O(candidates) once per filter combo | Inverted index as starting point + term-keyed cache |
 | Statistics | O(1) | Pre-computed at startup |
 | Federal entities list | O(1) | Pre-computed at startup |
 
 ### Optimizations Applied
 
+- **Pre-sorted inverted index buckets**: each entity/municipality bucket is sorted once at
+  load time and frozen as an immutable list — paginated searches never re-sort per request
+- **Term-keyed search caches with negative caching**: full sorted result lists cached per
+  normalized term (empty results included); pagination is a `subList`, cold keys are
+  computed once thanks to Caffeine per-key locking (no cache stampede)
 - **Pre-computed normalized fields**: NFD normalization done at load time, not at query time
-- **ConcurrentSkipListMap**: Prefix search uses `subMap()` range query instead of O(n) full scan
-- **Inverted indices for advanced search**: Reduces candidate set from ~32K to ~2K before filtering
+- **Memoized normalization in the loader**: low-cardinality settlement/zone types are
+  normalized once per distinct value instead of once per line (~1.5M redundant NFD passes removed)
+- **TreeMap (NavigableMap)**: Prefix search uses `subMap()` range query instead of O(n) full scan
+- **Inverted indices for advanced search**: Reduces candidate set before filtering
+- **Canonical String pool at load**: repeated low-cardinality strings share single instances
 - **Sequential streams for small collections**: Avoids ForkJoinPool overhead on indices with <100 entries
 - **Pre-compiled regex Pattern**: `PIPE_PATTERN` compiled once for file parsing
 - **Pre-computed statistics**: Stats and federal entities calculated once at startup
@@ -416,12 +457,15 @@ Tests run automatically on every push and pull request via GitHub Actions
 - **Parallel cache warmup**: CompletableFuture for concurrent cache preloading
 - **HTTP/2**: Enabled for connection multiplexing
 - **Response compression**: Gzip for responses > 1KB
+- **Catalog-versioned ETag**: conditional requests return 304 before running the handler
 
 ### Java 25 Optimizations
 
 - **Compact Object Headers**: Reduces object header from 12 to 8 bytes (~20% heap reduction)
-- **ZGC Generational**: Low-latency garbage collector
+- **ZGC**: Low-latency garbage collector (generational by default since JDK 23)
 - **Virtual Threads**: Enabled for high concurrency
+- **CDS archive baked into the Docker image**: classes pre-parsed during a build-time
+  training run cut 1-3s of cold-start time
 
 ## Docker Deployment
 
@@ -440,15 +484,28 @@ docker run -p 8080:8080 \
 ### Dockerfile Features
 
 - Multi-stage build (JDK 25 for build, JRE 25 Alpine for runtime)
+- Extracted JAR layout (`jarmode=tools extract`) — faster startup than the fat JAR
+- **CDS training run at build time**: the Spring context boots once during `docker build`
+  (`-Dspring.context.exit=onRefresh`), generating a class-data-sharing archive loaded at
+  runtime via `-XX:SharedArchiveFile` (measured ~1.1s faster startup: 3.4s vs 4.8s average;
+  also validates the catalog file at build time). Note: with ZGC only the class portion of
+  the archive is used — archived heap objects are not supported by ZGC and the JVM logs a
+  harmless `Cannot use CDS heap data` notice at startup.
 - Non-root user for security
-- Integrated health check
+- **Profile-aware health check**: the `prod` profile moves actuator to port 9090, so the
+  healthcheck probes `${MANAGEMENT_PORT:-$PORT}` and falls back to 9090 — the container
+  reports healthy on every profile without extra configuration
+- Log directory `/var/log/codigopostal-api` is pre-created and owned by the `spring` user
+  (the `prod` profile writes there; without it Logback failed on every container start)
 - JVM optimizations for containers:
   ```
   -XX:+UseCompactObjectHeaders
   -XX:+UseZGC
-  -XX:+ZGenerational
   -XX:MaxRAMPercentage=70.0
+  -XX:SharedArchiveFile=/app/application/app.jsa
   ```
+  (`-XX:+ZGenerational` was removed: generational ZGC is the default since JDK 23 and the
+  flag no longer exists on JDK 25; `-XX:+UseContainerSupport` is the default since JDK 10)
 
 ## Railway Deployment
 
@@ -528,6 +585,40 @@ Postal codes data sourced from:
 [Download latest data](https://www.correosdemexico.gob.mx/SSLServicios/ConsultaCP/CodigoPostal_Exportar.aspx)
 
 ## Version History
+
+### v3.2.0 (2026-07-21)
+- **Hot-path performance**:
+  - Inverted index buckets pre-sorted at load time (no per-request re-sorting)
+  - Search caches redesigned: keyed by normalized term only (page/size no longer churn
+    cache keys), storing the full sorted list; pagination is a cheap `subList`
+  - Negative caching: not-found terms are cached (repeated 404s no longer re-scan indices)
+  - Per-key locking via Caffeine `get(key, fn)` eliminates cache stampedes on cold keys
+  - Loader memoizes normalization of low-cardinality settlement/zone types (~1.5M
+    redundant NFD passes removed at startup)
+  - Removed dead `zipcodes` cache region; all manual caches now report metrics to Prometheus
+- **API robustness**:
+  - Missing required query param now returns 400 (was 500); type mismatches return 400;
+    unsupported methods return 405 with `Allow` header
+  - `ErrorResponse` semantics unified: `message` describes the error, `path` is always the request URI
+  - New `X-RateLimit-Burst` header; unset `burst-capacity` now defaults to
+    `requests-per-minute` instead of a silent cap of 20
+- **HTTP caching & security**:
+  - Weak ETag derived from the catalog SHA-256 + app version on all `/zip-codes/**` GETs;
+    `If-None-Match` returns `304` before executing the handler
+  - Railway profile no longer exposes `/actuator/prometheus` publicly by default
+    (opt back in with `ACTUATOR_EXPOSURE`)
+- **Build & deploy**:
+  - JaCoCo coverage report wired into the build (`mvn verify` → `target/site/jacoco/`)
+  - CI uploads coverage and builds the Docker image on every push/PR
+  - Dockerfile: extracted JAR layout + build-time CDS training run (measured ~1.1s faster
+    startup); removed obsolete `-XX:+ZGenerational`/`-XX:+UseContainerSupport` flags
+  - `spring-boot-maven-plugin` now generates build-info (app version feeds the ETag)
+- **Container fixes** (found while verifying the image):
+  - Docker healthcheck was permanently failing under the `prod` profile (actuator listens
+    on 9090 there, the check probed `$PORT`) — orchestrators would have restart-looped the
+    container; now probes `MANAGEMENT_PORT` with a 9090 fallback
+  - Pre-created `/var/log/codigopostal-api` owned by the `spring` user, fixing the Logback
+    `FileNotFoundException` logged on every `prod` container start
 
 ### v3.1.0 (2026-02-07)
 - **Performance optimizations**:

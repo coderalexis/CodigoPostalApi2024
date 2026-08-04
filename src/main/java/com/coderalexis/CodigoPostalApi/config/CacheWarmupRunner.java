@@ -12,6 +12,11 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Precarga en paralelo las búsquedas más comunes al arrancar. Como las cachés
+ * de entidad/municipio se llavean sólo por término (no por página), calentar un
+ * término beneficia a TODAS las páginas y tamaños de página de ese término.
+ */
 @Configuration
 @Slf4j
 public class CacheWarmupRunner {

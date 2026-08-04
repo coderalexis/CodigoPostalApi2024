@@ -22,13 +22,12 @@ import java.security.DigestInputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
-import java.util.Set;
 import java.util.TreeMap;
 import java.util.regex.Pattern;
 
@@ -106,9 +105,13 @@ public class SepomexZipCodeLoader {
         DigestInputStream digestStream = new DigestInputStream(bufferedStream, digest);
 
         // Estructuras temporales mutables: acumulan asentamientos por CP y canonizan
-        // los Strings repetidos. Ambas se descartan al terminar el parseo.
+        // los Strings repetidos. Todas se descartan al terminar el parseo.
+        // normalizedPool memoiza valor crudo -> valor normalizado canónico para los
+        // campos de baja cardinalidad, de modo que la normalización NFD corra una vez
+        // por valor distinto (decenas) y no una vez por línea (~1.5M).
         Map<String, Accumulator> accumulators = new HashMap<>();
         Map<String, String> stringPool = new HashMap<>();
+        Map<String, String> normalizedPool = new HashMap<>();
 
         try (BufferedReader reader = new BufferedReader(
                 new InputStreamReader(digestStream, charset))) {
@@ -118,7 +121,7 @@ public class SepomexZipCodeLoader {
             reader.readLine();
 
             long linesProcessed = reader.lines()
-                    .filter(line -> processLine(line, accumulators, stringPool))
+                    .filter(line -> processLine(line, accumulators, stringPool, normalizedPool))
                     .count();
 
             String checksum = HexFormat.of().formatHex(digest.digest());
@@ -142,8 +145,8 @@ public class SepomexZipCodeLoader {
     private ZipCodeData buildIndices(Map<String, Accumulator> accumulators, String checksum, String source) {
         Map<String, ZipCode> byCode = new HashMap<>(accumulators.size() * 2);
         NavigableMap<String, ZipCode> sorted = new TreeMap<>();
-        Map<String, Set<ZipCode>> byNormalizedEntity = new HashMap<>();
-        Map<String, Set<ZipCode>> byNormalizedMunicipality = new HashMap<>();
+        Map<String, List<ZipCode>> byNormalizedEntity = new HashMap<>();
+        Map<String, List<ZipCode>> byNormalizedMunicipality = new HashMap<>();
 
         for (Accumulator acc : accumulators.values()) {
             ZipCode zipCode = acc.toImmutable();
@@ -151,12 +154,26 @@ public class SepomexZipCodeLoader {
             byCode.put(zipCode.getZipCode(), zipCode);
             sorted.put(zipCode.getZipCode(), zipCode);
             byNormalizedEntity
-                    .computeIfAbsent(zipCode.getNormalizedFederalEntity(), k -> new HashSet<>())
+                    .computeIfAbsent(zipCode.getNormalizedFederalEntity(), k -> new ArrayList<>())
                     .add(zipCode);
             byNormalizedMunicipality
-                    .computeIfAbsent(zipCode.getNormalizedMunicipality(), k -> new HashSet<>())
+                    .computeIfAbsent(zipCode.getNormalizedMunicipality(), k -> new ArrayList<>())
                     .add(zipCode);
         }
+
+        // Los buckets se ordenan UNA vez aquí y se congelan: las búsquedas paginadas
+        // ya no re-ordenan por request. No hace falta dedup (antes HashSet) porque
+        // cada ZipCode tiene exactamente una entidad y un municipio normalizados,
+        // así que los buckets de un mismo índice son disjuntos.
+        Comparator<ZipCode> byZip = Comparator.comparing(ZipCode::getZipCode);
+        byNormalizedEntity.replaceAll((k, bucket) -> {
+            bucket.sort(byZip);
+            return List.copyOf(bucket);
+        });
+        byNormalizedMunicipality.replaceAll((k, bucket) -> {
+            bucket.sort(byZip);
+            return List.copyOf(bucket);
+        });
 
         return new ZipCodeData(byCode, sorted, byNormalizedEntity, byNormalizedMunicipality, checksum, source);
     }
@@ -241,7 +258,10 @@ public class SepomexZipCodeLoader {
         return StandardCharsets.ISO_8859_1;
     }
 
-    private boolean processLine(String line, Map<String, Accumulator> accumulators, Map<String, String> pool) {
+    private boolean processLine(String line,
+                                Map<String, Accumulator> accumulators,
+                                Map<String, String> pool,
+                                Map<String, String> normalizedPool) {
         try {
             String[] words = PIPE_PATTERN.split(line);
 
@@ -286,14 +306,15 @@ public class SepomexZipCodeLoader {
 
             // Fix #18: Settlements es un record inmutable con los campos normalizados precomputados.
             // El nombre del asentamiento es de alta cardinalidad y no se canoniza; el tipo de
-            // asentamiento y el tipo de zona sí (apenas unas decenas de valores distintos).
+            // asentamiento y el tipo de zona sí (apenas unas decenas de valores distintos), y su
+            // normalización se memoiza para no repetir NFD+regex en cada línea.
             acc.settlements.add(new Settlements(
                     settlementName,
                     canonical(zoneTypeVal, pool),
                     canonical(settlementTypeVal, pool),
                     Util.normalizeString(settlementName),
-                    canonical(Util.normalizeString(settlementTypeVal), pool),
-                    canonical(Util.normalizeString(zoneTypeVal), pool)));
+                    normalizedCanonical(settlementTypeVal, pool, normalizedPool),
+                    normalizedCanonical(zoneTypeVal, pool, normalizedPool)));
 
             return true;
 
@@ -314,6 +335,20 @@ public class SepomexZipCodeLoader {
             return null;
         }
         return pool.computeIfAbsent(value, k -> k);
+    }
+
+    /**
+     * Versión normalizada y canónica de un valor de baja cardinalidad. Memoiza
+     * crudo -> normalizado en {@code normalizedPool} para que la normalización
+     * NFD sólo se ejecute la primera vez que aparece cada valor distinto.
+     */
+    private static String normalizedCanonical(String value,
+                                              Map<String, String> pool,
+                                              Map<String, String> normalizedPool) {
+        if (value == null) {
+            return null;
+        }
+        return normalizedPool.computeIfAbsent(value, v -> canonical(Util.normalizeString(v), pool));
     }
 
     private MessageDigest newSha256() throws IOException {

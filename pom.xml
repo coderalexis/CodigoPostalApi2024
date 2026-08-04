@@ -35,6 +35,7 @@
 		<java.version>25</java.version>
 		<springdoc.version>3.0.1</springdoc.version>
 		<bucket4j.version>8.10.1</bucket4j.version>
+		<jacoco.version>0.8.13</jacoco.version>
 	</properties>
 	<dependencies>
 		<!-- Spring Boot Core Starters -->
@@ -114,6 +115,35 @@
 						</exclude>
 					</excludes>
 				</configuration>
+				<executions>
+					<execution>
+						<goals>
+							<!-- Genera META-INF/build-info.properties: BuildProperties queda
+							     disponible y el EtagInterceptor incluye la versión real de la
+							     app en el ETag (cambia el validador entre despliegues). -->
+							<goal>build-info</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.jacoco</groupId>
+				<artifactId>jacoco-maven-plugin</artifactId>
+				<version>${jacoco.version}</version>
+				<executions>
+					<execution>
+						<goals>
+							<goal>prepare-agent</goal>
+						</goals>
+					</execution>
+					<execution>
+						<id>report</id>
+						<phase>verify</phase>
+						<goals>
+							<goal>report</goal>
+						</goals>
+					</execution>
+				</executions>
 			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
