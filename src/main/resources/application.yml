@@ -85,7 +85,9 @@ management:
       export:
         enabled: true
 
-# Configuración de Rate Limiting por defecto (se sobrescribe en cada perfil)
+# Configuración de Rate Limiting por defecto (se sobrescribe en cada perfil).
+# burst-capacity no configurada => capacidad efectiva = requests-per-minute
+# (ver RateLimitProperties.getEffectiveBurstCapacity).
 ratelimit:
   enabled: false
   requests-per-minute: 1000

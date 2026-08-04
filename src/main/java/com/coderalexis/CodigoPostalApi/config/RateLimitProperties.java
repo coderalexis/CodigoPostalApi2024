@@ -32,13 +32,24 @@ public class RateLimitProperties {
     private boolean ipBased = true;
 
     /**
-     * Capacidad de ráfaga (burst capacity)
-     * Permite un pico temporal de peticiones
+     * Capacidad de ráfaga (burst capacity): permite un pico temporal de
+     * peticiones. {@code 0} (default) significa "no configurada": la capacidad
+     * efectiva pasa a ser {@code requestsPerMinute}. Antes el default silencioso
+     * era 20, con lo que un perfil que sólo configuraba requests-per-minute=1000
+     * anunciaba 1000/min pero el bucket nunca podía contener más de 20 tokens.
      */
-    private int burstCapacity = 20;
+    private int burstCapacity = 0;
 
     /**
      * Lista de IPs en whitelist (sin rate limiting)
      */
     private List<String> whitelist = new ArrayList<>();
+
+    /**
+     * Capacidad real del bucket: el burst configurado o, si no se configuró,
+     * la tasa sostenida por minuto.
+     */
+    public int getEffectiveBurstCapacity() {
+        return burstCapacity > 0 ? burstCapacity : requestsPerMinute;
+    }
 }

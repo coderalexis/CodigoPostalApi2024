@@ -19,13 +19,16 @@ public class WebMvcConfiguration implements WebMvcConfigurer {
     private final RateLimitInterceptor rateLimitInterceptor;
     private final RateLimitProperties rateLimitProperties;
     private final CacheControlInterceptor cacheControlInterceptor;
+    private final EtagInterceptor etagInterceptor;
 
     public WebMvcConfiguration(RateLimitInterceptor rateLimitInterceptor,
                               RateLimitProperties rateLimitProperties,
-                              CacheControlInterceptor cacheControlInterceptor) {
+                              CacheControlInterceptor cacheControlInterceptor,
+                              EtagInterceptor etagInterceptor) {
         this.rateLimitInterceptor = rateLimitInterceptor;
         this.rateLimitProperties = rateLimitProperties;
         this.cacheControlInterceptor = cacheControlInterceptor;
+        this.etagInterceptor = etagInterceptor;
     }
 
     @Override
@@ -46,7 +49,7 @@ public class WebMvcConfiguration implements WebMvcConfigurer {
         if (rateLimitProperties.isEnabled()) {
             log.info("✓ Rate Limiting HABILITADO: {} req/min, Burst: {}",
                 rateLimitProperties.getRequestsPerMinute(),
-                rateLimitProperties.getBurstCapacity());
+                rateLimitProperties.getEffectiveBurstCapacity());
 
             registry.addInterceptor(rateLimitInterceptor)
                     .addPathPatterns("/zip-codes/**")  // Solo aplicar a endpoints de la API
@@ -58,5 +61,11 @@ public class WebMvcConfiguration implements WebMvcConfigurer {
         } else {
             log.info("✗ Rate Limiting DESHABILITADO (perfil de desarrollo)");
         }
+
+        // ETag versionado por catálogo: registrado DESPUÉS del rate limit para que
+        // un 429 nunca se responda como 304 ni lleve ETag (si el rate limit corta,
+        // los preHandle posteriores no se ejecutan).
+        registry.addInterceptor(etagInterceptor)
+                .addPathPatterns("/zip-codes/**", "/zip-codes");
     }
 }

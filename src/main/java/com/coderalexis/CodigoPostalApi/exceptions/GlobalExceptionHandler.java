@@ -1,11 +1,15 @@
 package com.coderalexis.CodigoPostalApi.exceptions;
 
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import jakarta.validation.ConstraintViolationException;
@@ -30,6 +34,10 @@ public class GlobalExceptionHandler {
         return new ResponseEntity<>(error, HttpStatus.NOT_FOUND);
     }
 
+    // En todos los handlers, `message` describe el error y `path` contiene la URI
+    // del request (via request.getDescription); antes los handlers de validación
+    // invertían esa semántica poniendo la lista de errores en `path`.
+
     @ExceptionHandler(ConstraintViolationException.class)
     public ResponseEntity<ErrorResponse> handleConstraintViolationException(ConstraintViolationException ex, WebRequest request) {
         String errors = ex.getConstraintViolations()
@@ -39,8 +47,8 @@ public class GlobalExceptionHandler {
 
         ErrorResponse error = new ErrorResponse(
                 HttpStatus.BAD_REQUEST.value(),
-                "Errores de validación",
-                errors,
+                "Errores de validación: " + errors,
+                request.getDescription(false),
                 LocalDateTime.now()
         );
         log.warn("ConstraintViolationException: {}", errors);
@@ -54,15 +62,59 @@ public class GlobalExceptionHandler {
                           .stream()
                           .map(FieldError::getDefaultMessage)
                           .collect(Collectors.joining(", "));
-        
+
         ErrorResponse error = new ErrorResponse(
                 HttpStatus.BAD_REQUEST.value(),
-                "Errores de validación",
-                errors,
+                "Errores de validación: " + errors,
+                request.getDescription(false),
                 LocalDateTime.now()
         );
         log.warn("MethodArgumentNotValidException: {}", errors);
         return new ResponseEntity<>(error, HttpStatus.BAD_REQUEST);
+    }
+
+    @ExceptionHandler(MissingServletRequestParameterException.class)
+    public ResponseEntity<ErrorResponse> handleMissingServletRequestParameterException(
+            MissingServletRequestParameterException ex, WebRequest request) {
+        ErrorResponse error = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                "Falta el parámetro requerido: " + ex.getParameterName(),
+                request.getDescription(false),
+                LocalDateTime.now()
+        );
+        log.warn("MissingServletRequestParameterException: {}", ex.getParameterName());
+        return new ResponseEntity<>(error, HttpStatus.BAD_REQUEST);
+    }
+
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ErrorResponse> handleMethodArgumentTypeMismatchException(
+            MethodArgumentTypeMismatchException ex, WebRequest request) {
+        ErrorResponse error = new ErrorResponse(
+                HttpStatus.BAD_REQUEST.value(),
+                "Valor inválido para el parámetro '" + ex.getName() + "': " + ex.getValue(),
+                request.getDescription(false),
+                LocalDateTime.now()
+        );
+        log.warn("MethodArgumentTypeMismatchException: {}", ex.getMessage());
+        return new ResponseEntity<>(error, HttpStatus.BAD_REQUEST);
+    }
+
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public ResponseEntity<ErrorResponse> handleHttpRequestMethodNotSupportedException(
+            HttpRequestMethodNotSupportedException ex, WebRequest request) {
+        ErrorResponse error = new ErrorResponse(
+                HttpStatus.METHOD_NOT_ALLOWED.value(),
+                "Método " + ex.getMethod() + " no soportado para este recurso",
+                request.getDescription(false),
+                LocalDateTime.now()
+        );
+        log.warn("HttpRequestMethodNotSupportedException: {}", ex.getMethod());
+
+        HttpHeaders headers = new HttpHeaders();
+        if (ex.getSupportedHttpMethods() != null) {
+            headers.setAllow(ex.getSupportedHttpMethods());
+        }
+        return new ResponseEntity<>(error, headers, HttpStatus.METHOD_NOT_ALLOWED);
     }
 
     @ExceptionHandler(NoResourceFoundException.class)
@@ -103,8 +155,8 @@ public class GlobalExceptionHandler {
     ) {
         ErrorResponse error = new ErrorResponse(
                 HttpStatus.BAD_REQUEST.value(),
-                "Argumento inválido",
-                ex.getMessage(),
+                "Argumento inválido: " + ex.getMessage(),
+                request.getDescription(false),
                 LocalDateTime.now()
         );
         log.warn("IllegalArgumentException: {}", ex.getMessage());

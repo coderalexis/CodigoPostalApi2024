@@ -5,6 +5,7 @@ import com.coderalexis.CodigoPostalApi.model.AdvancedSearchRequest;
 import com.coderalexis.CodigoPostalApi.model.PagedResponse;
 import com.coderalexis.CodigoPostalApi.model.ZipCode;
 import com.coderalexis.CodigoPostalApi.model.ZipCodeStats;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.DisplayName;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,6 +22,9 @@ class ZipCodeServiceTest {
 
     @Autowired
     private ZipCodeService zipCodeService;
+
+    @Autowired
+    private MeterRegistry meterRegistry;
 
     @Test
     @DisplayName("Debe cargar los datos al iniciar")
@@ -270,6 +274,23 @@ class ZipCodeServiceTest {
     }
 
     @Test
+    @DisplayName("La llave de cache avanzada no debe colisionar cuando un filtro contiene el delimitador")
+    void shouldNotCollideAdvancedCacheKeysWhenFilterContainsDelimiter() {
+        AdvancedSearchRequest pipeInsideOneFilter = AdvancedSearchRequest.builder()
+                .federalEntity("x|y")
+                .build();
+
+        AdvancedSearchRequest twoSeparateFilters = AdvancedSearchRequest.builder()
+                .federalEntity("x")
+                .municipality("y")
+                .build();
+
+        assertNotEquals(pipeInsideOneFilter.normalizedFilterCacheKey(),
+                twoSeparateFilters.normalizedFilterCacheKey(),
+            "Un '|' dentro de un filtro no debe producir la misma llave que dos filtros separados");
+    }
+
+    @Test
     @DisplayName("Debe paginar búsqueda avanzada sin materializar desde el controlador")
     void shouldPaginateAdvancedSearchInService() {
         AdvancedSearchRequest request = AdvancedSearchRequest.builder()
@@ -322,6 +343,83 @@ class ZipCodeServiceTest {
         assertTrue(content.size() >= 2, "Se necesitan al menos 2 CP de la misma entidad");
         assertSame(content.get(0).getFederalEntity(), content.get(1).getFederalEntity(),
             "Los CP de la misma entidad deben compartir la instancia canónica de federalEntity");
+    }
+
+    @Test
+    @DisplayName("Debe cachear términos sin resultados (negative caching) y seguir lanzando 404")
+    void shouldCacheNotFoundEntityResults() {
+        String term = "EntidadInexistenteNegCache";
+
+        assertThrows(ZipCodeNotFoundException.class,
+                () -> zipCodeService.searchByFederalEntity(term, 0, 20),
+                "La primera búsqueda debe lanzar ZipCodeNotFoundException");
+
+        double hitsBefore = cacheHits("federalEntitySearch");
+        assertThrows(ZipCodeNotFoundException.class,
+                () -> zipCodeService.searchByFederalEntity(term, 0, 20),
+                "La segunda búsqueda debe seguir lanzando ZipCodeNotFoundException");
+        double hitsAfter = cacheHits("federalEntitySearch");
+
+        assertTrue(hitsAfter > hitsBefore,
+                "La segunda búsqueda del mismo término inexistente debe servirse desde la caché");
+    }
+
+    @Test
+    @DisplayName("Debe mantener páginas disjuntas y orden global entre páginas del mismo término")
+    void shouldKeepPagesDisjointAndGloballySorted() {
+        PagedResponse<ZipCode> page0 = zipCodeService.searchByFederalEntity("Jalisco", 0, 5);
+        PagedResponse<ZipCode> page1 = zipCodeService.searchByFederalEntity("Jalisco", 1, 5);
+
+        assertEquals(page0.getTotalElements(), page1.getTotalElements(),
+                "El total debe ser idéntico entre páginas del mismo término");
+
+        List<String> codes0 = page0.getContent().stream().map(ZipCode::getZipCode).toList();
+        List<String> codes1 = page1.getContent().stream().map(ZipCode::getZipCode).toList();
+        assertFalse(codes1.isEmpty(), "Jalisco debe tener más de una página con size=5");
+
+        assertTrue(codes0.stream().noneMatch(codes1::contains), "Las páginas deben ser disjuntas");
+        assertEquals(codes0.stream().sorted().toList(), codes0, "La página debe venir ordenada por CP");
+        assertTrue(codes0.get(codes0.size() - 1).compareTo(codes1.get(0)) < 0,
+                "El último CP de la página 0 debe ser menor que el primero de la página 1");
+    }
+
+    @Test
+    @DisplayName("Debe cachear la búsqueda avanzada solo-asentamiento y servir páginas siguientes desde caché")
+    void shouldCacheAdvancedSearchBySettlementTypeOnly() {
+        AdvancedSearchRequest request = AdvancedSearchRequest.builder()
+                .settlementType("Colonia")
+                .build();
+
+        PagedResponse<ZipCode> first = zipCodeService.advancedSearch(request, 0, 10);
+        assertTrue(first.getTotalElements() > 0, "Debe haber CP con asentamientos tipo Colonia");
+
+        double hitsBefore = cacheHits("advancedSearch");
+        PagedResponse<ZipCode> second = zipCodeService.advancedSearch(request, 1, 10);
+        double hitsAfter = cacheHits("advancedSearch");
+
+        assertTrue(hitsAfter > hitsBefore,
+                "La página siguiente de la misma combinación de filtros debe ser un hit de caché");
+        assertEquals(first.getTotalElements(), second.getTotalElements());
+    }
+
+    @Test
+    @DisplayName("Debe cachear combinaciones avanzadas sin resultados y seguir lanzando 404")
+    void shouldStillThrowForCachedEmptyAdvancedSearch() {
+        AdvancedSearchRequest request = AdvancedSearchRequest.builder()
+                .settlement("AsentamientoInexistente12345XYZ")
+                .build();
+
+        assertThrows(ZipCodeNotFoundException.class, () -> zipCodeService.advancedSearch(request, 0, 10));
+        assertThrows(ZipCodeNotFoundException.class, () -> zipCodeService.advancedSearch(request, 0, 10),
+                "La combinación vacía cacheada debe seguir produciendo 404 por request");
+    }
+
+    private double cacheHits(String cacheName) {
+        return meterRegistry.get("cache.gets")
+                .tag("cache", cacheName)
+                .tag("result", "hit")
+                .functionCounter()
+                .count();
     }
 
 }

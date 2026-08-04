@@ -78,7 +78,11 @@ public class RateLimitInterceptor implements HandlerInterceptor {
 
         if (bucket.tryConsume(1)) {
             long availableTokens = bucket.getAvailableTokens();
+            // Limit = tasa sostenida (refill por minuto); Burst = capacidad real del
+            // bucket, que es la cota de Remaining. Sin el header Burst, un Remaining
+            // menor que Limit resultaba inexplicable para el cliente.
             response.setHeader("X-RateLimit-Limit", String.valueOf(rateLimitProperties.getRequestsPerMinute()));
+            response.setHeader("X-RateLimit-Burst", String.valueOf(rateLimitProperties.getEffectiveBurstCapacity()));
             response.setHeader("X-RateLimit-Remaining", String.valueOf(availableTokens));
             return true;
         }
@@ -98,6 +102,7 @@ public class RateLimitInterceptor implements HandlerInterceptor {
             throws java.io.IOException {
         response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
         response.setHeader("X-RateLimit-Limit", String.valueOf(rateLimitProperties.getRequestsPerMinute()));
+        response.setHeader("X-RateLimit-Burst", String.valueOf(rateLimitProperties.getEffectiveBurstCapacity()));
         response.setHeader("X-RateLimit-Remaining", "0");
         response.setHeader("X-RateLimit-Retry-After-Seconds", "60");
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
@@ -115,7 +120,7 @@ public class RateLimitInterceptor implements HandlerInterceptor {
 
     private Bucket createNewBucket() {
         Bandwidth limit = Bandwidth.builder()
-                .capacity(rateLimitProperties.getBurstCapacity())
+                .capacity(rateLimitProperties.getEffectiveBurstCapacity())
                 .refillGreedy(rateLimitProperties.getRequestsPerMinute(), Duration.ofMinutes(1))
                 .build();
 

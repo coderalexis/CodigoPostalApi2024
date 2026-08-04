@@ -3,7 +3,10 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "java $JAVA_OPTS -jar /app/app.jar --spring.profiles.active=railway"
+# Debe coincidir con el layout del Dockerfile (jar extraído en /app/application) e
+# incluir $JVM_GC_OPTS: el archive CDS se genera con esos flags y la JVM lo rechaza
+# si el runtime arranca con flags de GC distintos.
+startCommand = "java $JVM_GC_OPTS $JAVA_OPTS -jar /app/application/app.jar --spring.profiles.active=railway"
 healthcheckPath = "/actuator/health"
 healthcheckTimeout = 60
 restartPolicyType = "on_failure"
