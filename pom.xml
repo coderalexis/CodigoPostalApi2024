@@ -5,7 +5,7 @@
 	<parent>
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.0.6</version>
+		<version>4.1.2</version>
 		<relativePath/>
 	</parent>
 	<groupId>com.coderalexis</groupId>
@@ -27,21 +27,23 @@
 		<url/>
 	</scm>
 	<!--
-		Fix #21: removida la propiedad <lombok.version>. Spring Boot 4.0.6 ya
+		Fix #21: removida la propiedad <lombok.version>. Spring Boot ya
 		gestiona la versión de Lombok desde su BOM y sobrescribirla podía
 		causar incompatibilidades sutiles con el annotation processor.
 	-->
 	<properties>
-		<java.version>25</java.version>
-		<springdoc.version>3.0.1</springdoc.version>
+		<java.version>27</java.version>
+		<springdoc.version>3.2.0</springdoc.version>
 		<bucket4j.version>8.10.1</bucket4j.version>
-		<jacoco.version>0.8.13</jacoco.version>
+		<jacoco.version>0.8.16</jacoco.version>
+		<!-- Valor vacío si se ejecutan las pruebas con -Djacoco.skip=true. -->
+		<argLine/>
 	</properties>
 	<dependencies>
 		<!-- Spring Boot Core Starters -->
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-web</artifactId>
+			<artifactId>spring-boot-starter-webmvc</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -104,6 +106,26 @@
 
 	<build>
 		<plugins>
+			<!-- Mockito se carga al iniciar la JVM; no depende de dynamic attach. -->
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-dependency-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>test-agent-path</id>
+						<goals>
+							<goal>properties</goal>
+						</goals>
+					</execution>
+				</executions>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<argLine>@{argLine} -javaagent:"${org.mockito:mockito-core:jar}"</argLine>
+				</configuration>
+			</plugin>
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>

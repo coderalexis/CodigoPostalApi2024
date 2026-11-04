@@ -1,6 +1,7 @@
 package com.coderalexis.CodigoPostalApi.util;
 
 import java.text.Normalizer;
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 public class Util {
@@ -20,7 +21,7 @@ public class Util {
         // Decompose accented characters into base + diacritic
         String normalized = Normalizer.normalize(input, Normalizer.Form.NFD);
         // Remove diacritics, keep only base characters
-        return DIACRITICS_PATTERN.matcher(normalized).replaceAll("").toLowerCase();
+        return DIACRITICS_PATTERN.matcher(normalized).replaceAll("").toLowerCase(Locale.ROOT);
     }
 
     /**

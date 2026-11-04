@@ -32,6 +32,19 @@ class ControllerTest {
     private ZipCodeService zipCodeService;
 
     @Test
+    @DisplayName("GET /v3/api-docs - Debe generar el contrato OpenAPI con Springdoc")
+    void shouldGenerateOpenApiDocument() throws Exception {
+        var result = mockMvc.perform(get("/v3/api-docs"))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.openapi").value(startsWith("3.")))
+                .andExpect(jsonPath("$.paths['/zip-codes/{zipcode}'].get").exists())
+                .andExpect(jsonPath("$.components.schemas.ZipCode").exists()).andReturn();
+        java.nio.file.Files.createDirectories(java.nio.file.Path.of("target"));
+        java.nio.file.Files.write(java.nio.file.Path.of("target/openapi.json"), result.getResponse().getContentAsByteArray());
+    }
+
+    @Test
     @DisplayName("GET /zip-codes/{zipcode} - Debe retornar código postal válido")
     void shouldReturnValidZipCode() throws Exception {
         mockMvc.perform(get("/zip-codes/01000")
@@ -485,7 +498,7 @@ class ControllerTest {
         assertNotNull(etag);
         assertTrue(etag.startsWith("W/\""), "El ETag debe ser débil (W/) por la compresión");
 
-        // Mismo validador -> 304 sin cuerpo (la búsqueda ni siquiera se ejecuta).
+        // Mismo validador -> 304 sin cuerpo, después de validar la petición.
         mockMvc.perform(get("/zip-codes/01000")
                 .header("If-None-Match", etag))
                 .andExpect(status().isNotModified())
@@ -496,5 +509,29 @@ class ControllerTest {
                 .header("If-None-Match", "W/\"otro-catalogo-0\""))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.zip_code").value("01000"));
+    }
+
+    @Test
+    void conditionalRequestsMustPreserveErrorsAndResourceIdentity() throws Exception {
+        String etag = mockMvc.perform(get("/zip-codes/01000")).andReturn().getResponse().getHeader("ETag");
+        for (String condition : new String[]{etag, "*"}) {
+            mockMvc.perform(get("/zip-codes/99999").header("If-None-Match", condition))
+                    .andExpect(status().isNotFound()).andExpect(header().doesNotExist("ETag"));
+            mockMvc.perform(get("/zip-codes/abc").header("If-None-Match", condition))
+                    .andExpect(status().isBadRequest()).andExpect(header().doesNotExist("ETag"));
+            mockMvc.perform(get("/zip-codes/advanced").header("If-None-Match", condition))
+                    .andExpect(status().isBadRequest());
+        }
+        mockMvc.perform(get("/zip-codes/01010").header("If-None-Match", etag))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.zip_code").value("01010"));
+        mockMvc.perform(get("/zip-codes/01000").header("If-None-Match", "\"other\", " + etag.substring(2)))
+                .andExpect(status().isNotModified()).andExpect(content().string(""))
+                .andExpect(header().exists("Cache-Control"));
+        mockMvc.perform(get("/zip-codes/01000").header("If-None-Match", "*"))
+                .andExpect(status().isNotModified());
+        String pageTag = mockMvc.perform(get("/zip-codes?federal_entity=Jalisco&page=0"))
+                .andReturn().getResponse().getHeader("ETag");
+        mockMvc.perform(get("/zip-codes?federal_entity=Jalisco&page=1").header("If-None-Match", pageTag))
+                .andExpect(status().isOk());
     }
 }

@@ -76,8 +76,9 @@ public class RateLimitInterceptor implements HandlerInterceptor {
         String key = rateLimitProperties.isIpBased() ? clientIp : "global";
         Bucket bucket = bucketCache.get(key, k -> createNewBucket());
 
-        if (bucket.tryConsume(1)) {
-            long availableTokens = bucket.getAvailableTokens();
+        var probe = bucket.tryConsumeAndReturnRemaining(1);
+        if (probe.isConsumed()) {
+            long availableTokens = probe.getRemainingTokens();
             // Limit = tasa sostenida (refill por minuto); Burst = capacidad real del
             // bucket, que es la cota de Remaining. Sin el header Burst, un Remaining
             // menor que Limit resultaba inexplicable para el cliente.
@@ -88,7 +89,8 @@ public class RateLimitInterceptor implements HandlerInterceptor {
         }
 
         log.warn("Rate limit excedido para IP: {}", clientIp);
-        writeRateLimitExceededResponse(request, response);
+        writeRateLimitExceededResponse(request, response, Math.max(1,
+                (long) Math.ceil(probe.getNanosToWaitForRefill() / 1_000_000_000.0)));
         return false;
     }
 
@@ -98,13 +100,15 @@ public class RateLimitInterceptor implements HandlerInterceptor {
      * errores (timestamp formateado, status, message, path) en vez de
      * construir el JSON con {@code String.format}.
      */
-    private void writeRateLimitExceededResponse(HttpServletRequest request, HttpServletResponse response)
+    private void writeRateLimitExceededResponse(HttpServletRequest request, HttpServletResponse response, long retryAfter)
             throws java.io.IOException {
         response.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
         response.setHeader("X-RateLimit-Limit", String.valueOf(rateLimitProperties.getRequestsPerMinute()));
         response.setHeader("X-RateLimit-Burst", String.valueOf(rateLimitProperties.getEffectiveBurstCapacity()));
         response.setHeader("X-RateLimit-Remaining", "0");
-        response.setHeader("X-RateLimit-Retry-After-Seconds", "60");
+        response.setHeader("Retry-After", Long.toString(retryAfter));
+        response.setHeader("X-RateLimit-Retry-After-Seconds", Long.toString(retryAfter));
+        response.setHeader("Cache-Control", "no-store");
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
 
         ErrorResponse body = new ErrorResponse(

@@ -19,16 +19,13 @@ public class WebMvcConfiguration implements WebMvcConfigurer {
     private final RateLimitInterceptor rateLimitInterceptor;
     private final RateLimitProperties rateLimitProperties;
     private final CacheControlInterceptor cacheControlInterceptor;
-    private final EtagInterceptor etagInterceptor;
 
     public WebMvcConfiguration(RateLimitInterceptor rateLimitInterceptor,
                               RateLimitProperties rateLimitProperties,
-                              CacheControlInterceptor cacheControlInterceptor,
-                              EtagInterceptor etagInterceptor) {
+                              CacheControlInterceptor cacheControlInterceptor) {
         this.rateLimitInterceptor = rateLimitInterceptor;
         this.rateLimitProperties = rateLimitProperties;
         this.cacheControlInterceptor = cacheControlInterceptor;
-        this.etagInterceptor = etagInterceptor;
     }
 
     @Override
@@ -36,6 +33,8 @@ public class WebMvcConfiguration implements WebMvcConfigurer {
         // Cache-Control para recursos estáticos (favicon, etc.). Las respuestas REST
         // usan CacheControlInterceptor (#23) que aplica TTLs específicos por endpoint.
         registry.addResourceHandler("/**")
+                .addResourceLocations("classpath:/META-INF/resources/", "classpath:/resources/",
+                        "classpath:/static/", "classpath:/public/")
                 .setCacheControl(CacheControl.maxAge(5, TimeUnit.MINUTES).cachePrivate());
     }
 
@@ -62,10 +61,5 @@ public class WebMvcConfiguration implements WebMvcConfigurer {
             log.info("✗ Rate Limiting DESHABILITADO (perfil de desarrollo)");
         }
 
-        // ETag versionado por catálogo: registrado DESPUÉS del rate limit para que
-        // un 429 nunca se responda como 304 ni lleve ETag (si el rate limit corta,
-        // los preHandle posteriores no se ejecutan).
-        registry.addInterceptor(etagInterceptor)
-                .addPathPatterns("/zip-codes/**", "/zip-codes");
     }
 }

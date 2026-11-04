@@ -1,0 +1,336 @@
+{
+  "date": "2026-11-03",
+  "scope": "Local comparison baseline, not production capacity. Cold RPS includes cache-reset HTTP calls.",
+  "summary": {
+    "direct_warm": {
+      "p95_median_ms": 3.168499970342964,
+      "rps_median": 3496.1037674030817,
+      "rss_peak_bytes": 613748736
+    },
+    "municipality_cold_cache": {
+      "p95_median_ms": 2.3178000119514763,
+      "rps_median": 328.9768032817815,
+      "rss_peak_bytes": 626925568
+    },
+    "municipality_warm": {
+      "p95_median_ms": 3.1447000219486654,
+      "rps_median": 4102.326799477044,
+      "rss_peak_bytes": 628338688
+    },
+    "advanced_cold_cache": {
+      "p95_median_ms": 14.110099989920855,
+      "rps_median": 77.29433947286317,
+      "rss_peak_bytes": 631427072
+    },
+    "advanced_warm": {
+      "p95_median_ms": 3.3113000099547207,
+      "rps_median": 3978.55083736126,
+      "rss_peak_bytes": 626913280
+    }
+  },
+  "runs": [
+    {
+      "platform": "Windows-11-10.0.26300-SP0",
+      "cpu_count": 12,
+      "command": [
+        ".mvn/jdks/jdk-27+35/bin/java.exe",
+        "-Xms128m",
+        "-Xmx384m",
+        "-XX:+UseZGC",
+        "-XX:+UseCompactObjectHeaders",
+        "-jar",
+        "C:\\dev\\postales\\CodigoPostalApi2024-mejorado\\target\\CodigoPostalApi-3.0.0-SNAPSHOT.jar",
+        "--spring.profiles.active=benchmark",
+        "--server.port=54242",
+        "--spring.main.banner-mode=off"
+      ],
+      "java": "openjdk version \"27\" 2026-09-15\nOpenJDK Runtime Environment Temurin-27+35 (build 27+35)\nOpenJDK 64-Bit Server VM Temurin-27+35 (build 27+35, mixed mode, sharing)",
+      "jar_sha256": "af21018ec71d879be78bad8d569838e3cac35c68e26b7c3633812f8fb123c5cb",
+      "catalog": {
+        "totalZipCodes": 31918,
+        "totalFederalEntities": 32,
+        "totalMunicipalities": 2478,
+        "totalSettlements": 157424,
+        "loadedAt": "2026-11-03T14:11:08",
+        "catalogChecksum": "1597996d71b67a7ebd171f25bfebb9b45cf2fa034ab77677f3a18b284badf8bb",
+        "catalogSource": "classpath:CPdescarga.txt"
+      },
+      "startup_seconds": 5.17613189999247,
+      "warmup_requests_per_scenario": 300,
+      "scenarios": {
+        "direct_warm": {
+          "requests": 1000,
+          "concurrency": 8,
+          "elapsed_seconds": 0.3299342999816872,
+          "requests_per_second": 3030.906456392998,
+          "p50_ms": 2.300299995113164,
+          "p95_ms": 4.199000017251819,
+          "p99_ms": 5.356499983463436,
+          "mean_ms": 2.506565700052306,
+          "rss_peak_bytes": 558477312,
+          "heap_committed_bytes": 358612992,
+          "heap_used_bytes": 136314880,
+          "cache_reset_control_in_throughput": false
+        },
+        "municipality_cold_cache": {
+          "requests": 50,
+          "concurrency": 1,
+          "elapsed_seconds": 0.18821079999906942,
+          "requests_per_second": 265.6595689527233,
+          "p50_ms": 1.9629999878816307,
+          "p95_ms": 3.3452000352554023,
+          "p99_ms": 5.251700000371784,
+          "mean_ms": 2.142613996984437,
+          "rss_peak_bytes": 568455168,
+          "heap_committed_bytes": 358612992,
+          "heap_used_bytes": 157286400,
+          "cache_reset_control_in_throughput": true
+        },
+        "municipality_warm": {
+          "requests": 1000,
+          "concurrency": 8,
+          "elapsed_seconds": 0.2871493000420742,
+          "requests_per_second": 3482.508924289477,
+          "p50_ms": 2.062699990347028,
+          "p95_ms": 3.697600041050464,
+          "p99_ms": 5.355699977371842,
+          "mean_ms": 2.228505498729646,
+          "rss_peak_bytes": 582238208,
+          "heap_committed_bytes": 358612992,
+          "heap_used_bytes": 201326592,
+          "cache_reset_control_in_throughput": false
+        },
+        "advanced_cold_cache": {
+          "requests": 50,
+          "concurrency": 1,
+          "elapsed_seconds": 0.646877899998799,
+          "requests_per_second": 77.29433947286317,
+          "p50_ms": 11.500499967951328,
+          "p95_ms": 13.75220000045374,
+          "p99_ms": 16.532399982679635,
+          "mean_ms": 11.942946002818644,
+          "rss_peak_bytes": 579670016,
+          "heap_committed_bytes": 358612992,
+          "heap_used_bytes": 157286400,
+          "cache_reset_control_in_throughput": true
+        },
+        "advanced_warm": {
+          "requests": 1000,
+          "concurrency": 8,
+          "elapsed_seconds": 0.25564550003036857,
+          "requests_per_second": 3911.6667411756057,
+          "p50_ms": 1.7728000530041754,
+          "p95_ms": 3.443000023253262,
+          "p99_ms": 4.636100027710199,
+          "mean_ms": 1.9383426995482296,
+          "rss_peak_bytes": 584839168,
+          "heap_committed_bytes": 358612992,
+          "heap_used_bytes": 209715200,
+          "cache_reset_control_in_throughput": false
+        }
+      }
+    },
+    {
+      "platform": "Windows-11-10.0.26300-SP0",
+      "cpu_count": 12,
+      "command": [
+        ".mvn/jdks/jdk-27+35/bin/java.exe",
+        "-Xms128m",
+        "-Xmx384m",
+        "-XX:+UseZGC",
+        "-XX:+UseCompactObjectHeaders",
+        "-jar",
+        "C:\\dev\\postales\\CodigoPostalApi2024-mejorado\\target\\CodigoPostalApi-3.0.0-SNAPSHOT.jar",
+        "--spring.profiles.active=benchmark",
+        "--server.port=51869",
+        "--spring.main.banner-mode=off"
+      ],
+      "java": "openjdk version \"27\" 2026-09-15\nOpenJDK Runtime Environment Temurin-27+35 (build 27+35)\nOpenJDK 64-Bit Server VM Temurin-27+35 (build 27+35, mixed mode, sharing)",
+      "jar_sha256": "af21018ec71d879be78bad8d569838e3cac35c68e26b7c3633812f8fb123c5cb",
+      "catalog": {
+        "totalZipCodes": 31918,
+        "totalFederalEntities": 32,
+        "totalMunicipalities": 2478,
+        "totalSettlements": 157424,
+        "loadedAt": "2026-11-03T14:14:52",
+        "catalogChecksum": "1597996d71b67a7ebd171f25bfebb9b45cf2fa034ab77677f3a18b284badf8bb",
+        "catalogSource": "classpath:CPdescarga.txt"
+      },
+      "startup_seconds": 5.140795200015418,
+      "warmup_requests_per_scenario": 300,
+      "scenarios": {
+        "direct_warm": {
+          "requests": 1000,
+          "concurrency": 8,
+          "elapsed_seconds": 0.2860326999798417,
+          "requests_per_second": 3496.1037674030817,
+          "p50_ms": 2.1227000397630036,
+          "p95_ms": 3.168499970342964,
+          "p99_ms": 4.0262999827973545,
+          "mean_ms": 2.230328000790905,
+          "rss_peak_bytes": 613748736,
+          "heap_used_bytes": 171966464,
+          "heap_committed_bytes": 371195904,
+          "cache_reset_control_in_throughput": false
+        },
+        "municipality_cold_cache": {
+          "requests": 50,
+          "concurrency": 1,
+          "elapsed_seconds": 0.1519863999565132,
+          "requests_per_second": 328.9768032817815,
+          "p50_ms": 1.6215999494306743,
+          "p95_ms": 2.237000036984682,
+          "p99_ms": 4.474900022614747,
+          "mean_ms": 1.737943998305127,
+          "rss_peak_bytes": 626925568,
+          "heap_used_bytes": 132120576,
+          "heap_committed_bytes": 371195904,
+          "cache_reset_control_in_throughput": true
+        },
+        "municipality_warm": {
+          "requests": 1000,
+          "concurrency": 8,
+          "elapsed_seconds": 0.24082070001168177,
+          "requests_per_second": 4152.466959657088,
+          "p50_ms": 1.7257999861612916,
+          "p95_ms": 3.0258999904617667,
+          "p99_ms": 4.148199979681522,
+          "mean_ms": 1.8300905006472021,
+          "rss_peak_bytes": 628338688,
+          "heap_used_bytes": 176160768,
+          "heap_committed_bytes": 371195904,
+          "cache_reset_control_in_throughput": false
+        },
+        "advanced_cold_cache": {
+          "requests": 50,
+          "concurrency": 1,
+          "elapsed_seconds": 0.7086840000119992,
+          "requests_per_second": 70.55330725563638,
+          "p50_ms": 12.245299993082881,
+          "p95_ms": 18.175400036852807,
+          "p99_ms": 38.15849998500198,
+          "mean_ms": 13.087387998821214,
+          "rss_peak_bytes": 631427072,
+          "heap_used_bytes": 274726912,
+          "heap_committed_bytes": 371195904,
+          "cache_reset_control_in_throughput": true
+        },
+        "advanced_warm": {
+          "requests": 1000,
+          "concurrency": 8,
+          "elapsed_seconds": 0.2513477999600582,
+          "requests_per_second": 3978.55083736126,
+          "p50_ms": 1.7863999819383025,
+          "p95_ms": 3.3113000099547207,
+          "p99_ms": 4.755000001750886,
+          "mean_ms": 1.9221083992742933,
+          "rss_peak_bytes": 626913280,
+          "heap_used_bytes": 329252864,
+          "heap_committed_bytes": 371195904,
+          "cache_reset_control_in_throughput": false
+        }
+      }
+    },
+    {
+      "platform": "Windows-11-10.0.26300-SP0",
+      "cpu_count": 12,
+      "command": [
+        ".mvn/jdks/jdk-27+35/bin/java.exe",
+        "-Xms128m",
+        "-Xmx384m",
+        "-XX:+UseZGC",
+        "-XX:+UseCompactObjectHeaders",
+        "-jar",
+        "C:\\dev\\postales\\CodigoPostalApi2024-mejorado\\target\\CodigoPostalApi-3.0.0-SNAPSHOT.jar",
+        "--spring.profiles.active=benchmark",
+        "--server.port=51943",
+        "--spring.main.banner-mode=off"
+      ],
+      "java": "openjdk version \"27\" 2026-09-15\nOpenJDK Runtime Environment Temurin-27+35 (build 27+35)\nOpenJDK 64-Bit Server VM Temurin-27+35 (build 27+35, mixed mode, sharing)",
+      "jar_sha256": "af21018ec71d879be78bad8d569838e3cac35c68e26b7c3633812f8fb123c5cb",
+      "catalog": {
+        "totalZipCodes": 31918,
+        "totalFederalEntities": 32,
+        "totalMunicipalities": 2478,
+        "totalSettlements": 157424,
+        "loadedAt": "2026-11-03T14:15:01",
+        "catalogChecksum": "1597996d71b67a7ebd171f25bfebb9b45cf2fa034ab77677f3a18b284badf8bb",
+        "catalogSource": "classpath:CPdescarga.txt"
+      },
+      "startup_seconds": 5.752659599995241,
+      "warmup_requests_per_scenario": 300,
+      "scenarios": {
+        "direct_warm": {
+          "requests": 1000,
+          "concurrency": 8,
+          "elapsed_seconds": 0.2746004000073299,
+          "requests_per_second": 3641.6552924660964,
+          "p50_ms": 2.050900016911328,
+          "p95_ms": 3.1101999920792878,
+          "p99_ms": 4.024399968329817,
+          "mean_ms": 2.129092001589015,
+          "rss_peak_bytes": 596561920,
+          "heap_used_bytes": 155189248,
+          "heap_committed_bytes": 373293056,
+          "cache_reset_control_in_throughput": false
+        },
+        "municipality_cold_cache": {
+          "requests": 50,
+          "concurrency": 1,
+          "elapsed_seconds": 0.14625600003637373,
+          "requests_per_second": 341.86631651053665,
+          "p50_ms": 1.5570999821648002,
+          "p95_ms": 2.3178000119514763,
+          "p99_ms": 4.434000002220273,
+          "mean_ms": 1.7146240011788905,
+          "rss_peak_bytes": 597901312,
+          "heap_used_bytes": 109051904,
+          "heap_committed_bytes": 373293056,
+          "cache_reset_control_in_throughput": true
+        },
+        "municipality_warm": {
+          "requests": 1000,
+          "concurrency": 8,
+          "elapsed_seconds": 0.24376409995602444,
+          "requests_per_second": 4102.326799477044,
+          "p50_ms": 1.7649999936111271,
+          "p95_ms": 3.1447000219486654,
+          "p99_ms": 4.001000022981316,
+          "mean_ms": 1.886540700972546,
+          "rss_peak_bytes": 601141248,
+          "heap_used_bytes": 153092096,
+          "heap_committed_bytes": 373293056,
+          "cache_reset_control_in_throughput": false
+        },
+        "advanced_cold_cache": {
+          "requests": 50,
+          "concurrency": 1,
+          "elapsed_seconds": 0.6467860999982804,
+          "requests_per_second": 77.30531005557005,
+          "p50_ms": 11.964300007093698,
+          "p95_ms": 14.110099989920855,
+          "p99_ms": 16.416600032243878,
+          "mean_ms": 12.161664000013843,
+          "rss_peak_bytes": 617644032,
+          "heap_used_bytes": 203423744,
+          "heap_committed_bytes": 373293056,
+          "cache_reset_control_in_throughput": true
+        },
+        "advanced_warm": {
+          "requests": 1000,
+          "concurrency": 8,
+          "elapsed_seconds": 0.23385340004460886,
+          "requests_per_second": 4276.183283241742,
+          "p50_ms": 1.6027000383473933,
+          "p95_ms": 3.2441000221297145,
+          "p99_ms": 5.441799992695451,
+          "mean_ms": 1.7919161999598145,
+          "rss_peak_bytes": 611741696,
+          "heap_used_bytes": 255852544,
+          "heap_committed_bytes": 373293056,
+          "cache_reset_control_in_throughput": false
+        }
+      }
+    }
+  ]
+}

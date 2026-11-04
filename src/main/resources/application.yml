@@ -16,7 +16,10 @@ spring:
     time-zone: America/Mexico_City
 
 zipcode:
+  catalog:
+    directory: ${ZIPCODE_CATALOG_DIRECTORY:}
   file:
+    encoding: ${ZIPCODE_FILE_ENCODING:auto}
     path: ${ZIPCODE_FILE_PATH:classpath:CPdescarga.txt}
 
 server:

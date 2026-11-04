@@ -1,0 +1,545 @@
+{
+  "info": {
+    "name": "CodigoPostalApi · Domicilios e integración",
+    "description": "Ejecuta con el perfil dev y el catálogo incluido. Cambia baseUrl para otro servidor. Los grupos cubren los 11 endpoints, errores y ETag. No fuerzan el límite de peticiones; en un 429 respeta Retry-After. Ejecuta el grupo ETag en orden.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "type": "string"
+    },
+    {
+      "key": "etag",
+      "value": "",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Consultas y domicilios",
+      "item": [
+        {
+          "name": "Opciones para domicilio",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/01000/address"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON válido', () => pm.response.json());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validación correcta",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/validate-address",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"zip_code\": \"01000\",\n  \"federal_entity\": \"Ciudad de México\",\n  \"municipality\": \"Álvaro Obregón\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON válido', () => pm.response.json());",
+                  "pm.test('Coincide', () => pm.expect(pm.response.json().valid).to.eql(true));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validación con alternativas",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/validate-address",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"zip_code\": \"01000\",\n  \"federal_entity\": \"Jalisco\",\n  \"municipality\": \"Guadalajara\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON válido', () => pm.response.json());",
+                  "pm.test('Ofrece alternativas', () => { const r=pm.response.json(); pm.expect(r.valid).to.eql(false); pm.expect(r.suggestions.length).to.be.within(1,5); });"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Consulta por CP",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/01000"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON válido', () => pm.response.json());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Colonias",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/01000/settlements"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON válido', () => pm.response.json());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Autocompletado",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/search?code=010&limit=8&simplified=true"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON válido', () => pm.response.json());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Estados",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/federal-entities"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON válido', () => pm.response.json());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Municipios de Jalisco",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/federal-entities/Jalisco/municipalities"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON válido', () => pm.response.json());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Consulta por estado",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes?federal_entity=Jalisco&page=0&size=20"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON válido', () => pm.response.json());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Consulta por municipio",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/by-municipality?municipality=Guadalajara&page=0&size=20"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON válido', () => pm.response.json());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Búsqueda avanzada",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/advanced?federal_entity=Jalisco&municipality=Guadalajara&page=0&size=20"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON válido', () => pm.response.json());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Estadísticas y checksum",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/stats"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON válido', () => pm.response.json());"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Errores",
+      "item": [
+        {
+          "name": "Formato inválido sigue siendo 400",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "If-None-Match",
+                "value": "*"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/abc"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('JSON válido', () => pm.response.json());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "CP inexistente sigue siendo 404",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "If-None-Match",
+                "value": "*"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/99999"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 404', () => pm.response.to.have.status(404));",
+                  "pm.test('JSON válido', () => pm.response.json());"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Validación incompleta",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/validate-address",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('JSON válido', () => pm.response.json());"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ETag",
+      "item": [
+        {
+          "name": "1. Capturar ETag",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/01000"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON válido', () => pm.response.json());",
+                  "pm.collectionVariables.set('etag', pm.response.headers.get('ETag'));",
+                  "pm.test('ETag presente', () => pm.expect(pm.response.headers.get('ETag')).to.be.a('string')); "
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "2. Revalidar el mismo recurso",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "If-None-Match",
+                "value": "{{etag}}"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/01000"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 304', () => pm.response.to.have.status(304));",
+                  "pm.test('Sin cuerpo', () => pm.expect(pm.response.text()).to.eql(''));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "3. Otro recurso no reutiliza el validador",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Accept",
+                "value": "application/json"
+              },
+              {
+                "key": "If-None-Match",
+                "value": "{{etag}}"
+              }
+            ],
+            "url": "{{baseUrl}}/zip-codes/44100"
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('JSON válido', () => pm.response.json());"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

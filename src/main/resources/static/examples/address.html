@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Encuentra tu domicilio · Códigos postales</title><link rel="stylesheet" href="address.css"></head>
+<body><main><header><span class="badge">CÓDIGOS POSTALES · MÉXICO</span><h1>Tu domicilio,<br>sin complicaciones.</h1>
+<p>Escribe tu código postal para encontrar el estado, municipio y las colonias disponibles.</p></header>
+<section class="card"><form id="address-form">
+<label for="zip">Código postal</label><input id="zip" name="zip_code" inputmode="numeric" autocomplete="postal-code" pattern="[0-9]{5}" maxlength="5" list="zip-suggestions" placeholder="Ej. 01000" required aria-describedby="status"><datalist id="zip-suggestions"></datalist>
+<div class="grid"><div><label for="state">Estado</label><input id="state" name="federal_entity" autocomplete="address-level1" maxlength="120" required></div>
+<div><label for="municipality">Municipio o alcaldía</label><input id="municipality" name="municipality" autocomplete="address-level2" maxlength="120" required></div></div>
+<label for="settlement">Colonia o asentamiento</label><select id="settlement" disabled><option>Primero escribe un código postal</option></select>
+<button type="submit" id="validate">Comprobar coincidencia</button>
+<p id="status" role="status" aria-live="polite">Puedes comenzar con 01000, 44100 o 64000.</p>
+<ul id="alternatives" aria-label="Domicilios sugeridos"></ul></form></section>
+<footer>Información del catálogo SEPOMEX. La comprobación relaciona código postal, estado y municipio; no verifica calles ni números exteriores.</footer>
+</main><script type="module" src="address.js"></script></body></html>

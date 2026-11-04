@@ -33,8 +33,7 @@ import java.util.regex.Pattern;
  *       silencio en el servidor real — los tests MockMvc no lo detectan porque
  *       {@code MockHttpServletResponse} nunca se compromete.</li>
  *   <li>{@link #afterCompletion}: para respuestas sin body (p.ej. el 304 del
- *       {@link EtagInterceptor}), donde la respuesta sigue sin comprometerse y el
- *       body advice no se ejecuta.</li>
+ *       sin un convertidor de cuerpo), donde la respuesta sigue sin comprometerse.</li>
  * </ul>
  *
  * <p>No se aplica a respuestas de error (4xx/5xx) para evitar que un fallo
@@ -57,6 +56,7 @@ public class CacheControlInterceptor implements HandlerInterceptor, ResponseBody
         String oneHour = CacheControl.maxAge(1, TimeUnit.HOURS).cachePublic().getHeaderValue();
         RULES.put(Pattern.compile("^/zip-codes/\\d{5}$"), oneHour);
         RULES.put(Pattern.compile("^/zip-codes/\\d{5}/settlements$"), oneHour);
+        RULES.put(Pattern.compile("^/zip-codes/\\d{5}/address$"), oneHour);
         RULES.put(Pattern.compile("^/zip-codes/stats$"), oneHour);
         RULES.put(Pattern.compile("^/zip-codes/federal-entities/[^/]+/municipalities$"), oneHour);
 

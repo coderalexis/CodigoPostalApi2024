@@ -144,6 +144,19 @@ public class ZipCodeService {
         return zipCodesByCode.size();
     }
 
+    public List<ZipCode> findByExactLocation(String normalizedEntity, String normalizedMunicipality) {
+        return zipCodesByNormalizedMunicipality.getOrDefault(normalizedMunicipality, List.of()).stream()
+                .filter(z -> z.getNormalizedFederalEntity().equals(normalizedEntity)).toList();
+    }
+
+    /** Control de medición, expuesto por HTTP exclusivamente en el perfil benchmark y en loopback. */
+    public void clearSearchCachesForBenchmark() {
+        partialPrefixCache.invalidateAll();
+        entitySearchCache.invalidateAll();
+        municipalitySearchCache.invalidateAll();
+        advancedSearchCache.invalidateAll();
+    }
+
     // No @Cacheable needed: Map.get() is already O(1).
     // Caching would add serialization overhead without latency benefit.
     public ZipCode getZipCode(String zipcode) {
@@ -214,7 +227,8 @@ public class ZipCodeService {
         cachedStats = ZipCodeStats.builder()
                 .totalZipCodes(zipCodesByCode.size())
                 .totalFederalEntities(zipCodesByNormalizedEntity.size())
-                .totalMunicipalities(zipCodesByNormalizedMunicipality.size())
+                .totalMunicipalities((int) zipCodesByCode.values().stream()
+                        .map(z -> z.getFederalEntityCode() + ":" + z.getMunicipalityCode()).distinct().count())
                 .totalSettlements(totalSettlements)
                 .loadedAt(loadedAt)
                 .catalogChecksum(catalogChecksum)
@@ -227,7 +241,7 @@ public class ZipCodeService {
                     List<ZipCode> zipCodes = entry.getValue();
 
                     long municipalitiesCount = zipCodes.stream()
-                            .map(ZipCode::getMunicipality)
+                            .map(ZipCode::getMunicipalityCode)
                             .distinct()
                             .count();
 

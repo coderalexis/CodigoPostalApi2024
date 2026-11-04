@@ -20,7 +20,7 @@ High-performance REST API for querying Mexican postal codes (ZIP codes) with adv
 
 ## Features
 
-- **High Performance**: Optimized data structures for sub-millisecond lookups
+- **Indexed Queries**: In-memory maps and cached searches, with a reproducible HTTP benchmark
 - **Smart Caching**: Multi-level Caffeine cache with specific TTL per data type
 - **Pagination**: Consistent pagination across all search endpoints
 - **Partial Code Search**: Autocomplete support with O(log n) prefix matching via sorted map
@@ -35,6 +35,10 @@ High-performance REST API for querying Mexican postal codes (ZIP codes) with adv
 - **Accent-Insensitive Search**: Searches work regardless of accents or case
 - **Auto Encoding Detection**: Automatic detection of ISO-8859-1/UTF-8 file encoding
 - **HTTP/2**: Enabled for connection multiplexing and reduced latency
+- **Address Validation**: Check CP, state and municipality with bounded alternatives
+- **Address Forms**: Compact options and a working autocomplete example
+- **Catalog Updates**: Strict validation, versioned imports, change reports and rollback
+- **Integration Kit**: OpenAPI-generated TypeScript client and tested Postman collection
 - **Complete Documentation**: Interactive Swagger UI with examples
 - **Cloud-Native**: Optimized for Railway, Docker, and container deployments
 
@@ -42,25 +46,26 @@ High-performance REST API for querying Mexican postal codes (ZIP codes) with adv
 
 | Technology | Version | Description |
 |------------|---------|-------------|
-| **Java** | 25 | Latest with Compact Object Headers and Virtual Threads |
-| **Spring Boot** | 4.0.2 | Latest framework with modular architecture |
+| **Java** | 27 | Compact Object Headers and Virtual Threads |
+| **Spring Boot** | 4.1.2 | Framework with modular architecture |
 | **Spring Web** | - | REST API support with HTTP/2 |
 | **Spring Cache** | - | Caching abstraction |
 | **Caffeine** | - | High-performance in-memory cache |
 | **Bucket4j** | 8.10.1 | Rate limiting implementation |
-| **Lombok** | 1.18.40 | Reduce boilerplate code |
+| **Lombok** | Managed by Spring Boot | Reduce boilerplate code; Java 27 support |
 | **Spring Boot Actuator** | - | Production-ready features |
 | **Micrometer** | - | Application metrics |
 | **Prometheus** | - | Metrics collection |
-| **SpringDoc OpenAPI** | 3.0.1 | Swagger UI & API documentation |
-| **JUnit 5** | - | Testing framework (Jupiter) |
+| **SpringDoc OpenAPI** | 3.2.0 | Swagger UI & API documentation |
+| **JaCoCo** | 0.8.16 | Code coverage with Java 27 support |
+| **JUnit Jupiter** | Managed by Spring Boot | Testing framework |
 | **Maven** | 3.8+ | Build tool |
 
 ## Quick Start
 
 ### Prerequisites
 
-- Java 25 or higher
+- JDK 27
 - Maven 3.8+
 - (Optional) Docker
 
@@ -91,8 +96,21 @@ The API will be available at `http://localhost:8080`
 The application uses the `CPdescarga.txt` file containing Mexican postal codes:
 - By default, it loads from `classpath:CPdescarga.txt` (bundled in JAR)
 - Can be overridden with environment variable: `ZIPCODE_FILE_PATH`
+- Versioned store: `ZIPCODE_CATALOG_DIRECTORY` takes precedence; see [catalog operations](docs/catalog.md)
+- Invalid or contradictory rows reject the entire catalog at startup
 - Supports both UTF-8 and ISO-8859-1 encoding (auto-detected)
 - Download the latest version [here](https://www.correosdemexico.gob.mx/SSLServicios/ConsultaCP/CodigoPostal_Exportar.aspx)
+
+## Address validation and integration
+
+- `POST /zip-codes/validate-address`: validate CP, state and municipality; returns alternatives on inconsistency.
+- `GET /zip-codes/{zipcode}/address`: compact state, municipality and settlement options.
+- Open `http://localhost:8080/examples/address.html` for the working autocomplete form.
+- [Integration guide, examples, Postman and TypeScript](docs/integration.md)
+- [Catalog import, quality checks and rollback](docs/catalog.md)
+- [Reproducible performance measurements](docs/performance.md)
+
+These checks relate postal codes to catalog locations; they do not verify streets or house numbers.
 
 ## API Endpoints
 
@@ -325,7 +343,8 @@ If `burst-capacity` is not configured, the effective bucket capacity equals `req
 X-RateLimit-Limit: 100                 # Sustained rate (tokens refilled per minute)
 X-RateLimit-Burst: 20                  # Real bucket capacity (upper bound of Remaining)
 X-RateLimit-Remaining: 17
-X-RateLimit-Retry-After-Seconds: 60    # Only on 429 responses
+Retry-After: 1                       # On 429; actual wait until the next token
+X-RateLimit-Retry-After-Seconds: 1     # Backward-compatible alias
 ```
 
 ## Caching
@@ -357,17 +376,16 @@ keyed by term, warming a term benefits every page and page size of that term.
 
 ### HTTP Caching (ETag / 304)
 
-Every `GET /zip-codes/**` response carries a weak `ETag` derived from the catalog's
-SHA-256 checksum plus the app version. Clients (and CDNs) can revalidate with
-`If-None-Match`: a match short-circuits **before** the handler runs and returns
-`304 Not Modified` with no body — no search, no JSON serialization. The validator only
-changes when the catalog file or the application version changes.
+Successful `GET /zip-codes/**` responses carry a weak `ETag` specific to the URL,
+query, media type, catalog checksum, build and loaded instance. Validation and resource
+resolution run first: errors remain 400/404 even with `If-None-Match: *`. A matching
+validator on a successful representation returns 304 with no JSON serialization.
+A tag from another URL or page does not match. Restarting the service invalidates tags.
 
 ```bash
-curl -si http://localhost:8080/zip-codes/01000 | grep ETag
-# ETag: W/"3f6c2a9b8d41e07a-3.0.0-SNAPSHOT"
-curl -si -H 'If-None-Match: W/"3f6c2a9b8d41e07a-3.0.0-SNAPSHOT"' http://localhost:8080/zip-codes/01000
-# HTTP/1.1 304 Not Modified
+# Save the ETag returned by this exact URL, then reuse it with its cached body:
+curl -si http://localhost:8080/zip-codes/01000
+curl -si -H 'If-None-Match: <ETag from the previous response>' http://localhost:8080/zip-codes/01000
 ```
 
 ## Monitoring and Metrics
@@ -408,12 +426,17 @@ mvn test jacoco:report
 
 ### Test Coverage
 
-- **Total tests:** 80
-- **Service tests:** 29 (ZipCodeServiceTest — includes negative caching, page consistency and cache-hit metrics)
-- **Controller/integration tests:** 39 (ControllerTest — includes 400/405 error mapping and ETag/304)
-- **Rate-limit tests:** 8 (RateLimitInterceptorTest)
-- **Health indicator tests:** 3 (ZipCodeHealthIndicatorTest)
-- **Application context test:** 1
+Java tests cover queries, pagination, ETag identity/error semantics, municipality
+identities, address validation, static example resources, catalog validation/checksums,
+rate limiting, benchmark isolation, health and context startup.
+
+```bash
+mvn verify
+python -m unittest discover -s scripts/tests -v
+python scripts/sync_openapi.py --check
+npm --prefix integrations/typescript ci --ignore-scripts --no-audit --no-fund
+npm --prefix integrations/typescript test
+```
 
 The JaCoCo HTML report is generated at `target/site/jacoco/index.html` (also produced by
 `mvn verify` and uploaded as a CI artifact).
@@ -423,6 +446,10 @@ Tests run automatically on every push and pull request via GitHub Actions
 training run) to catch Dockerfile regressions.
 
 ## Performance
+
+Use the [benchmark guide](docs/performance.md) to measure direct queries, advanced
+search and cold caches with p95, RPS, RSS and heap metrics. Results include runtime,
+JAR and catalog identities; compare repeated runs on the same machine.
 
 ### Data Structure Complexity
 
@@ -445,7 +472,7 @@ training run) to catch Dockerfile regressions.
   computed once thanks to Caffeine per-key locking (no cache stampede)
 - **Pre-computed normalized fields**: NFD normalization done at load time, not at query time
 - **Memoized normalization in the loader**: low-cardinality settlement/zone types are
-  normalized once per distinct value instead of once per line (~1.5M redundant NFD passes removed)
+  normalized once per distinct value instead of once per line
 - **TreeMap (NavigableMap)**: Prefix search uses `subMap()` range query instead of O(n) full scan
 - **Inverted indices for advanced search**: Reduces candidate set before filtering
 - **Canonical String pool at load**: repeated low-cardinality strings share single instances
@@ -457,15 +484,15 @@ training run) to catch Dockerfile regressions.
 - **Parallel cache warmup**: CompletableFuture for concurrent cache preloading
 - **HTTP/2**: Enabled for connection multiplexing
 - **Response compression**: Gzip for responses > 1KB
-- **Catalog-versioned ETag**: conditional requests return 304 before running the handler
+- **Resource-specific ETag**: conditional requests return 304 after successful handler validation, avoiding JSON serialization
 
-### Java 25 Optimizations
+### Java 27 Runtime Optimizations
 
-- **Compact Object Headers**: Reduces object header from 12 to 8 bytes (~20% heap reduction)
+- **Compact Object Headers**: Reduces object-header overhead; measure the heap benefit for the actual dataset
 - **ZGC**: Low-latency garbage collector (generational by default since JDK 23)
 - **Virtual Threads**: Enabled for high concurrency
 - **CDS archive baked into the Docker image**: classes pre-parsed during a build-time
-  training run cut 1-3s of cold-start time
+  training run reduce class-loading work at startup
 
 ## Docker Deployment
 
@@ -483,7 +510,7 @@ docker run -p 8080:8080 \
 
 ### Dockerfile Features
 
-- Multi-stage build (JDK 25 for build, JRE 25 Alpine for runtime)
+- Multi-stage build (JDK 27 for build, JRE 27 Alpine for runtime)
 - Extracted JAR layout (`jarmode=tools extract`) — faster startup than the fat JAR
 - **CDS training run at build time**: the Spring context boots once during `docker build`
   (`-Dspring.context.exit=onRefresh`), generating a class-data-sharing archive loaded at
@@ -529,7 +556,7 @@ docker run -p 8080:8080 \
 
 - **RAM**: ~200-250 MB
 - **Startup time**: ~3-5 seconds
-- **Cost**: ~$5 USD/month (Hobby plan)
+- **Cost**: Depends on the selected plan and measured resource consumption
 
 ## Development
 
@@ -572,7 +599,7 @@ mvn spring-boot:run    # Run application
 **IntelliJ IDEA:**
 1. Install Lombok plugin
 2. Enable annotation processing
-3. Set project SDK to Java 25
+3. Set project SDK and Maven runner JDK to Java 27
 
 ## License
 
@@ -585,6 +612,17 @@ Postal codes data sourced from:
 [Download latest data](https://www.correosdemexico.gob.mx/SSLServicios/ConsultaCP/CodigoPostal_Exportar.aspx)
 
 ## Version History
+
+### Unreleased
+- Fix conditional requests masking errors; distinguish municipality identities by state and official code.
+- Add address validation, compact options and a working autocomplete form.
+- Add strict catalog imports, change reports, checksum verification and rollback.
+- Add reproducible local benchmarks and isolated cache reset controls.
+- Add Postman, OpenAPI-generated TypeScript client, Retry-After handling and CI contract checks.
+- Upgrade to Spring Boot 4.1.2 and Java 27, including Docker and CI.
+- Update Springdoc to 3.2.0 and JaCoCo to 0.8.16 for the new runtime.
+- Load Mockito as a startup agent alongside JaCoCo, without dynamic attachment.
+- Verify OpenAPI document generation in the controller integration tests.
 
 ### v3.2.0 (2026-07-21)
 - **Hot-path performance**:

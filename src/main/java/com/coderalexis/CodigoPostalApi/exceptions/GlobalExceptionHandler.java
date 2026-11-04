@@ -22,6 +22,12 @@ import java.util.stream.Collectors;
 @Slf4j
 public class GlobalExceptionHandler {
 
+    @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleInvalidJson(WebRequest request) {
+        return ResponseEntity.badRequest().body(new ErrorResponse(400, "El cuerpo JSON es inválido",
+                request.getDescription(false), LocalDateTime.now()));
+    }
+
     @ExceptionHandler(ZipCodeNotFoundException.class)
     public ResponseEntity<ErrorResponse> handleZipCodeNotFoundException(ZipCodeNotFoundException ex, WebRequest request) {
         ErrorResponse error = new ErrorResponse(

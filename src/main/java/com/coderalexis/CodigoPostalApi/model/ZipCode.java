@@ -36,6 +36,12 @@ public class ZipCode {
 
     private final String municipality;
 
+    @JsonIgnore
+    private final String federalEntityCode;
+
+    @JsonIgnore
+    private final String municipalityCode;
+
     private final List<Settlements> settlements;
 
     @JsonIgnore

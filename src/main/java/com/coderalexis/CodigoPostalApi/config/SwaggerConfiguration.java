@@ -4,6 +4,10 @@ import io.swagger.v3.oas.models.*;
 import io.swagger.v3.oas.models.info.*;
 import io.swagger.v3.oas.models.servers.Server;
 import org.springdoc.core.models.GroupedOpenApi;
+import org.springdoc.core.customizers.GlobalOpenApiCustomizer;
+import io.swagger.v3.oas.models.responses.ApiResponse;
+import io.swagger.v3.oas.models.media.*;
+import io.swagger.v3.oas.models.headers.Header;
 import org.springframework.context.annotation.*;
 
 import java.util.List;
@@ -12,38 +16,18 @@ import java.util.List;
 public class SwaggerConfiguration {
 
     @Bean
-    public OpenAPI customOpenAPI() {
+    public OpenAPI customOpenAPI(org.springframework.beans.factory.ObjectProvider<org.springframework.boot.info.BuildProperties> builds) {
+        var build = builds.getIfAvailable();
         return new OpenAPI()
                 .info(new Info()
                         .title("API de Códigos Postales de México")
-                        .version("2.1.0")
+                        .version(build == null ? "dev" : build.getVersion())
                         .description("""
-                                # API de Códigos Postales de México
-
-                                API REST de alto rendimiento para consultar códigos postales mexicanos con:
-
-                                ## Características
-                                - 🔍 Búsqueda por código postal, entidad federativa y municipio
-                                - 📊 Paginación en todas las búsquedas
-                                - ⚡ Caché inteligente con Caffeine
-                                - 📈 Métricas con Prometheus
-                                - 🔒 Búsquedas insensibles a acentos y mayúsculas
-                                - 🏥 Health checks integrados
-
-                                ## Rendimiento
-                                - **6,389 req/s** en búsquedas directas
-                                - **156ms** tiempo de respuesta promedio
-                                - **99%** de requests bajo 190ms
-
-                                ## Datos
-                                Basado en el Catálogo Nacional de Códigos Postales de Correos de México.
-                                Más de 145,000 códigos postales disponibles.
-
-                                ## Endpoints Principales
-                                - `GET /zip-codes/{codigo}` - Buscar por código postal
-                                - `GET /zip-codes?federal_entity={nombre}` - Buscar por estado
-                                - `GET /zip-codes/by-municipality?municipality={nombre}` - Buscar por municipio
-                                - `GET /zip-codes/stats` - Estadísticas generales
+                                Consulta códigos postales mexicanos, valida la relación CP/estado/municipio
+                                y obtiene opciones de domicilio para formularios. Los nombres se comparan
+                                sin acentos ni distinción de mayúsculas. No verifica calles ni números.
+                                Consulta /zip-codes/stats para identificar el catálogo activo y sus totales.
+                                Los límites de peticiones se comunican mediante X-RateLimit-* y Retry-After.
                                 """)
                         .contact(new Contact()
                                 .name("Jose Alexis")
@@ -61,6 +45,18 @@ public class SwaggerConfiguration {
                                 .url("https://zipcode.coderalexis.com")
                                 .description("🚀 Producción")
                 ));
+    }
+
+    @Bean
+    public GlobalOpenApiCustomizer rateLimitDocumentation() {
+        return api -> api.getPaths().forEach((path, item) -> {
+            if (path.startsWith("/zip-codes")) item.readOperations().forEach(operation ->
+                operation.getResponses().addApiResponse("429", new ApiResponse()
+                    .description("Límite de peticiones alcanzado; espera Retry-After segundos")
+                    .addHeaderObject("Retry-After", new Header().schema(new IntegerSchema()).description("Segundos hasta el siguiente token"))
+                    .content(new Content().addMediaType("application/json", new MediaType()
+                        .schema(new Schema<>().$ref("#/components/schemas/ErrorResponse"))))));
+        });
     }
 
     @Bean

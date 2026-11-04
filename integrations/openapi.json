@@ -1,0 +1,1131 @@
+{
+  "components": {
+    "schemas": {
+      "AddressOptions": {
+        "properties": {
+          "federal_entity": {
+            "type": "string"
+          },
+          "federal_entity_code": {
+            "type": "string"
+          },
+          "municipality": {
+            "type": "string"
+          },
+          "municipality_code": {
+            "type": "string"
+          },
+          "settlements": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "zip_code": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "AddressValidationRequest": {
+        "properties": {
+          "federal_entity": {
+            "example": "Ciudad de México",
+            "maxLength": 120,
+            "minLength": 0,
+            "type": "string"
+          },
+          "municipality": {
+            "example": "Álvaro Obregón",
+            "maxLength": 120,
+            "minLength": 0,
+            "type": "string"
+          },
+          "zip_code": {
+            "example": "01000",
+            "minLength": 1,
+            "pattern": "[0-9]{5}",
+            "type": "string"
+          }
+        },
+        "required": [
+          "federal_entity",
+          "municipality",
+          "zip_code"
+        ],
+        "type": "object"
+      },
+      "AddressValidationResult": {
+        "properties": {
+          "canonical": {
+            "$ref": "#/components/schemas/AddressOptions"
+          },
+          "issues": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "suggestions": {
+            "items": {
+              "$ref": "#/components/schemas/AddressOptions"
+            },
+            "type": "array"
+          },
+          "suggestions_truncated": {
+            "type": "boolean"
+          },
+          "total_suggestions": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "valid": {
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "ErrorResponse": {
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "status": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "timestamp": {
+            "format": "date-time",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "FederalEntity": {
+        "properties": {
+          "municipalities_count": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "zip_codes_count": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "PagedResponse": {
+        "properties": {
+          "content": {
+            "items": {},
+            "type": "array"
+          },
+          "first": {
+            "type": "boolean"
+          },
+          "last": {
+            "type": "boolean"
+          },
+          "pageNumber": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "pageSize": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "totalElements": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "totalPages": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      },
+      "Settlements": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "settlement_type": {
+            "type": "string"
+          },
+          "zone_type": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ZipCode": {
+        "properties": {
+          "federal_entity": {
+            "type": "string"
+          },
+          "locality": {
+            "type": "string"
+          },
+          "municipality": {
+            "type": "string"
+          },
+          "settlements": {
+            "items": {
+              "$ref": "#/components/schemas/Settlements"
+            },
+            "type": "array"
+          },
+          "zip_code": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "ZipCodeStats": {
+        "properties": {
+          "catalogChecksum": {
+            "type": "string"
+          },
+          "catalogSource": {
+            "type": "string"
+          },
+          "loadedAt": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "totalFederalEntities": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "totalMunicipalities": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "totalSettlements": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "totalZipCodes": {
+            "format": "int32",
+            "type": "integer"
+          }
+        },
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "contact": {
+      "email": "coderalexis@gmail.com",
+      "name": "Jose Alexis",
+      "url": "https://www.coderalexis.com"
+    },
+    "description": "Consulta códigos postales mexicanos, valida la relación CP/estado/municipio\ny obtiene opciones de domicilio para formularios. Los nombres se comparan\nsin acentos ni distinción de mayúsculas. No verifica calles ni números.\nConsulta /zip-codes/stats para identificar el catálogo activo y sus totales.\nLos límites de peticiones se comunican mediante X-RateLimit-* y Retry-After.\n",
+    "license": {
+      "name": "Licencia MIT",
+      "url": "https://opensource.org/licenses/MIT"
+    },
+    "title": "API de Códigos Postales de México",
+    "version": "3.0.0-SNAPSHOT"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/zip-codes": {
+      "get": {
+        "description": "Busca códigos postales por entidad federativa con paginación automática.\n\n### Características:\n- ✅ Búsqueda parcial (ej: \"mex\" encuentra \"México\", \"Nuevo México\")\n- ✅ Insensible a acentos (\"Mexico\" = \"México\")\n- ✅ Insensible a mayúsculas\n- ✅ Resultados paginados\n",
+        "operationId": "searchByFederalEntity",
+        "parameters": [
+          {
+            "description": "Término de búsqueda para la entidad federativa (puede ser parcial)",
+            "example": "mexico",
+            "in": "query",
+            "name": "federal_entity",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Número de página (comienza en 0)",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "format": "int32",
+              "maximum": 10000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Tamaño de página",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagedResponse"
+                }
+              }
+            },
+            "description": "Lista de códigos postales que coinciden"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Parámetros de búsqueda inválidos"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No se encontraron códigos postales"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Límite de peticiones alcanzado; espera Retry-After segundos",
+            "headers": {
+              "Retry-After": {
+                "description": "Segundos hasta el siguiente token",
+                "schema": {
+                  "format": "int32",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "🗺️ Buscar por entidad federativa (estado)",
+        "tags": [
+          "Búsqueda por Ubicación"
+        ]
+      }
+    },
+    "/zip-codes/advanced": {
+      "get": {
+        "description": "Búsqueda con múltiples filtros combinados.\n\n### Filtros disponibles:\n- `federal_entity` - Entidad federativa (estado)\n- `municipality` - Municipio\n- `settlement` - Nombre de colonia/asentamiento\n- `settlement_type` - Tipo de asentamiento (Colonia, Fraccionamiento, etc.)\n- `zone_type` - Tipo de zona (Urbano, Rural)\n",
+        "operationId": "advancedSearch",
+        "parameters": [
+          {
+            "description": "Entidad federativa (estado)",
+            "in": "query",
+            "name": "federal_entity",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Municipio",
+            "in": "query",
+            "name": "municipality",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Nombre de colonia/asentamiento",
+            "in": "query",
+            "name": "settlement",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Tipo de asentamiento",
+            "in": "query",
+            "name": "settlement_type",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Tipo de zona (Urbano/Rural)",
+            "in": "query",
+            "name": "zone_type",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Número de página",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "format": "int32",
+              "maximum": 10000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Tamaño de página",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Si es true, devuelve formato simplificado",
+            "in": "query",
+            "name": "simplified",
+            "required": false,
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagedResponse"
+                }
+              }
+            },
+            "description": "Códigos postales encontrados"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Parámetros de búsqueda inválidos"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No se encontraron resultados"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Límite de peticiones alcanzado; espera Retry-After segundos",
+            "headers": {
+              "Retry-After": {
+                "description": "Segundos hasta el siguiente token",
+                "schema": {
+                  "format": "int32",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "🔬 Búsqueda avanzada",
+        "tags": [
+          "Búsqueda Avanzada"
+        ]
+      }
+    },
+    "/zip-codes/by-municipality": {
+      "get": {
+        "description": "Busca códigos postales por municipio con paginación.\n\n### Características:\n- ✅ Búsqueda parcial\n- ✅ Insensible a acentos y mayúsculas\n- ✅ Resultados paginados\n",
+        "operationId": "searchByMunicipality",
+        "parameters": [
+          {
+            "description": "Término de búsqueda para el municipio (puede ser parcial)",
+            "example": "Guadalajara",
+            "in": "query",
+            "name": "municipality",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          {
+            "description": "Número de página (comienza en 0)",
+            "in": "query",
+            "name": "page",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "format": "int32",
+              "maximum": 10000,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Tamaño de página",
+            "in": "query",
+            "name": "size",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "format": "int32",
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PagedResponse"
+                }
+              }
+            },
+            "description": "Lista de códigos postales que coinciden con el municipio"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Parámetros de búsqueda inválidos"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No se encontraron códigos postales"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Límite de peticiones alcanzado; espera Retry-After segundos",
+            "headers": {
+              "Retry-After": {
+                "description": "Segundos hasta el siguiente token",
+                "schema": {
+                  "format": "int32",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "🏘️ Buscar por municipio",
+        "tags": [
+          "Búsqueda por Ubicación"
+        ]
+      }
+    },
+    "/zip-codes/federal-entities": {
+      "get": {
+        "description": "Obtiene la lista completa de las 32 entidades federativas (estados) de México.",
+        "operationId": "getAllFederalEntities",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FederalEntity"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Lista de entidades federativas"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Límite de peticiones alcanzado; espera Retry-After segundos",
+            "headers": {
+              "Retry-After": {
+                "description": "Segundos hasta el siguiente token",
+                "schema": {
+                  "format": "int32",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "🗺️ Listar todas las entidades federativas",
+        "tags": [
+          "Catálogos"
+        ]
+      }
+    },
+    "/zip-codes/federal-entities/{federalEntity}/municipalities": {
+      "get": {
+        "description": "Obtiene la lista de municipios de una entidad federativa específica.",
+        "operationId": "getMunicipalitiesByFederalEntity",
+        "parameters": [
+          {
+            "description": "Nombre de la entidad federativa",
+            "example": "Jalisco",
+            "in": "path",
+            "name": "federalEntity",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Lista de municipios"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Entidad federativa no encontrada"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Límite de peticiones alcanzado; espera Retry-After segundos",
+            "headers": {
+              "Retry-After": {
+                "description": "Segundos hasta el siguiente token",
+                "schema": {
+                  "format": "int32",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "🏙️ Listar municipios por entidad federativa",
+        "tags": [
+          "Catálogos"
+        ]
+      }
+    },
+    "/zip-codes/search": {
+      "get": {
+        "description": "Busca códigos postales que inicien con el prefijo proporcionado.\nIdeal para implementar autocompletado.\n",
+        "operationId": "searchByPartialCode",
+        "parameters": [
+          {
+            "description": "Código postal parcial (solo dígitos)",
+            "example": "010",
+            "in": "query",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "pattern": "\\d{1,5}",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Número máximo de resultados (1-50)",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "format": "int32",
+              "maximum": 50,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Si es true, devuelve formato simplificado",
+            "in": "query",
+            "name": "simplified",
+            "required": false,
+            "schema": {
+              "default": false,
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ZipCode"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Códigos postales encontrados"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Formato de código inválido"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No se encontraron códigos postales"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Límite de peticiones alcanzado; espera Retry-After segundos",
+            "headers": {
+              "Retry-After": {
+                "description": "Segundos hasta el siguiente token",
+                "schema": {
+                  "format": "int32",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "🔎 Búsqueda parcial de código postal",
+        "tags": [
+          "Búsqueda Directa"
+        ]
+      }
+    },
+    "/zip-codes/stats": {
+      "get": {
+        "description": "Obtiene estadísticas sobre el catálogo completo de códigos postales.",
+        "operationId": "getStats",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZipCodeStats"
+                }
+              }
+            },
+            "description": "Estadísticas obtenidas exitosamente"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Límite de peticiones alcanzado; espera Retry-After segundos",
+            "headers": {
+              "Retry-After": {
+                "description": "Segundos hasta el siguiente token",
+                "schema": {
+                  "format": "int32",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "📊 Estadísticas generales",
+        "tags": [
+          "Estadísticas"
+        ]
+      }
+    },
+    "/zip-codes/validate-address": {
+      "post": {
+        "description": "Coincidencia exacta ignorando acentos, mayúsculas y espacios exteriores. Una inconsistencia devuelve 200 con valid=false y hasta cinco alternativas. No verifica calles ni números exteriores.",
+        "operationId": "validateAddress",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddressValidationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddressValidationResult"
+                }
+              }
+            },
+            "description": "Resultado de validación"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Solicitud inválida"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Límite de peticiones alcanzado; espera Retry-After segundos",
+            "headers": {
+              "Retry-After": {
+                "description": "Segundos hasta el siguiente token",
+                "schema": {
+                  "format": "int32",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Validar CP, estado y municipio",
+        "tags": [
+          "Domicilios"
+        ]
+      }
+    },
+    "/zip-codes/{zipcode}": {
+      "get": {
+        "description": "Obtiene información completa de un código postal específico incluyendo:\n- Entidad federativa\n- Municipio\n- Localidad\n- Lista de asentamientos (colonias, fraccionamientos, etc.)\n\n### Ejemplos de uso:\n- `01000` - San Ángel, Ciudad de México\n- `44100` - Guadalajara Centro, Jalisco\n- `64000` - Monterrey Centro, Nuevo León\n\n### Rendimiento:\nEste endpoint está optimizado con caché, tiempo de respuesta típico: **~50ms**\n",
+        "operationId": "getZipCode",
+        "parameters": [
+          {
+            "description": "El código postal a buscar",
+            "example": "01000",
+            "in": "path",
+            "name": "zipcode",
+            "required": true,
+            "schema": {
+              "pattern": "\\d{5}",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ZipCode"
+                }
+              }
+            },
+            "description": "Código postal encontrado"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Formato de código postal inválido"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Código postal no encontrado"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Límite de peticiones alcanzado; espera Retry-After segundos",
+            "headers": {
+              "Retry-After": {
+                "description": "Segundos hasta el siguiente token",
+                "schema": {
+                  "format": "int32",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "🔍 Buscar código postal específico",
+        "tags": [
+          "Búsqueda Directa"
+        ]
+      }
+    },
+    "/zip-codes/{zipcode}/address": {
+      "get": {
+        "operationId": "getAddressOptions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "zipcode",
+            "required": true,
+            "schema": {
+              "pattern": "[0-9]{5}",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/AddressOptions"
+                }
+              }
+            },
+            "description": "Estado, municipio y colonias"
+          },
+          "400": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Formato de CP inválido"
+          },
+          "404": {
+            "content": {
+              "*/*": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "CP no encontrado"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Límite de peticiones alcanzado; espera Retry-After segundos",
+            "headers": {
+              "Retry-After": {
+                "description": "Segundos hasta el siguiente token",
+                "schema": {
+                  "format": "int32",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Opciones compactas para un formulario de domicilio",
+        "tags": [
+          "Domicilios"
+        ]
+      }
+    },
+    "/zip-codes/{zipcode}/settlements": {
+      "get": {
+        "description": "Obtiene la lista de colonias/asentamientos de un código postal específico.",
+        "operationId": "getSettlementsByZipCode",
+        "parameters": [
+          {
+            "description": "El código postal",
+            "example": "01000",
+            "in": "path",
+            "name": "zipcode",
+            "required": true,
+            "schema": {
+              "pattern": "\\d{5}",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Settlements"
+                  },
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Lista de asentamientos"
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Formato de código postal inválido"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Código postal no encontrado"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Límite de peticiones alcanzado; espera Retry-After segundos",
+            "headers": {
+              "Retry-After": {
+                "description": "Segundos hasta el siguiente token",
+                "schema": {
+                  "format": "int32",
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "summary": "🏘️ Obtener colonias por código postal",
+        "tags": [
+          "Búsqueda Directa"
+        ]
+      }
+    }
+  },
+  "servers": [
+    {
+      "description": "🛠️ Desarrollo Local",
+      "url": "http://localhost:8080"
+    },
+    {
+      "description": "🚀 Producción",
+      "url": "https://zipcode.coderalexis.com"
+    }
+  ]
+}

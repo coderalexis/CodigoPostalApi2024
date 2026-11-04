@@ -99,3 +99,10 @@ logs/
 
 # Archivos de ejecución y pruebas locales
 *.run/
+
+# Integration dependencies, generated builds and local catalog versions
+node_modules/
+integrations/typescript/dist/
+__pycache__/
+*.pyc
+/data/catalog/

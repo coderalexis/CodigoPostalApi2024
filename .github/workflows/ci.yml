@@ -23,15 +23,51 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up JDK 25
+      - name: Set up JDK 27
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '25'
+          java-version: '27'
           cache: maven
 
       - name: Build and run tests
         run: mvn -B --no-transfer-progress verify
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Check catalog tools and generated contract
+        run: |
+          python -m unittest discover -s scripts/tests -v
+          python scripts/catalog.py validate src/main/resources/CPdescarga.txt
+          python scripts/sync_openapi.py --check
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: integrations/typescript/package-lock.json
+
+      - name: Generate and test TypeScript client
+        working-directory: integrations/typescript
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run generate
+          git diff --exit-code -- src/schema.d.ts
+          npm test
+
+      - name: Publish integration artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-integrations
+          path: |
+            integrations/openapi.json
+            integrations/postman/*.json
+            integrations/typescript/dist/
+          retention-days: 7
 
       - name: Publish test report
         if: always()

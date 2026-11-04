@@ -1,5 +1,5 @@
 # Etapa 1: Build con cacheo de dependencias
-FROM eclipse-temurin:25-jdk AS build
+FROM eclipse-temurin:27-jdk AS build
 WORKDIR /workspace
 
 # Copiar solo archivos de dependencias primero para aprovechar caché de Docker
@@ -16,8 +16,8 @@ COPY src src
 # Compilar aplicación
 RUN ./mvnw package -DskipTests -B
 
-# Etapa 2: Runtime optimizado con Java 25
-FROM eclipse-temurin:25-jre-alpine
+# Etapa 2: Runtime optimizado con Java 27
+FROM eclipse-temurin:27-jre-alpine
 WORKDIR /app
 
 # Crear usuario no-root para seguridad. El directorio de logs se crea aquí porque

@@ -1,0 +1,14 @@
+.git
+target
+logs
+.mvn/*
+!.mvn/wrapper
+!.mvn/wrapper/**
+.idea
+.vscode
+.env
+*.log
+**/node_modules
+integrations/typescript/dist
+**/__pycache__
+data/catalog

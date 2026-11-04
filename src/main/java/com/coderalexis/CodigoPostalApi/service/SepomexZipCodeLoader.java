@@ -8,7 +8,13 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
-import java.io.BufferedInputStream;
+import java.io.ByteArrayInputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.CharacterCodingException;
+import java.util.HashSet;
+import java.util.Set;
+import com.fasterxml.jackson.databind.json.JsonMapper;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -61,9 +67,10 @@ public class SepomexZipCodeLoader {
     private static final int COL_FEDERAL_ENTITY = 4;
     private static final int COL_LOCALITY = 5;
     private static final int COL_ZONE_TYPE_INDEX = 13;
-    private static final int MIN_COLUMNS = 6;
+    private static final int MIN_COLUMNS = 15;
     private static final int MAX_ERRORS_THRESHOLD = 100;
-    private static final int CHARSET_SAMPLE_SIZE = 4096;
+    private static final int MAX_FILE_BYTES = 100 * 1024 * 1024;
+    private static final String HEADER = "d_codigo|d_asenta|d_tipo_asenta|D_mnpio|d_estado|d_ciudad|d_CP|c_estado|c_oficina|c_CP|c_tipo_asenta|c_mnpio|id_asenta_cpcons|d_zona|c_cve_ciudad";
 
     private static final Pattern ZIP_CODE_PATTERN = Pattern.compile("^\\d{5}$");
 
@@ -71,6 +78,12 @@ public class SepomexZipCodeLoader {
 
     @Value("${zipcode.file.path}")
     private String filePath;
+
+    @Value("${zipcode.file.encoding:auto}")
+    private String fileEncoding = "auto";
+
+    @Value("${zipcode.catalog.directory:}")
+    private String catalogDirectory = "";
 
     private int errorCount = 0;
 
@@ -87,22 +100,23 @@ public class SepomexZipCodeLoader {
             return null;
         }
         try (InputStream stream = resolved.stream()) {
-            return parse(stream, resolved.description());
+            byte[] bytes = stream.readNBytes(MAX_FILE_BYTES + 1);
+            if (bytes.length > MAX_FILE_BYTES) throw new IOException("El catálogo excede 100 MiB");
+            ZipCodeData data = parse(new ByteArrayInputStream(bytes), resolved.description(), detectCharset(bytes));
+            if (resolved.expectedChecksum() != null && !resolved.expectedChecksum().equals(data.checksum())) {
+                throw new IOException("Checksum incorrecto en el catálogo activo");
+            }
+            return data;
         }
     }
 
-    private ZipCodeData parse(InputStream stream, String source) throws IOException {
+    private ZipCodeData parse(InputStream stream, String source, Charset charset) throws IOException {
         long startTime = System.currentTimeMillis();
         errorCount = 0;
 
-        BufferedInputStream bufferedStream = new BufferedInputStream(stream);
-        Charset charset = detectCharset(bufferedStream);
         log.info("Encoding detectado: {}", charset.name());
-
         MessageDigest digest = newSha256();
-        // Se envuelve DESPUÉS de detectCharset (que hace mark/reset sobre los primeros
-        // bytes), de modo que cada byte del archivo se digiere exactamente una vez.
-        DigestInputStream digestStream = new DigestInputStream(bufferedStream, digest);
+        DigestInputStream digestStream = new DigestInputStream(stream, digest);
 
         // Estructuras temporales mutables: acumulan asentamientos por CP y canonizan
         // los Strings repetidos. Todas se descartan al terminar el parseo.
@@ -112,18 +126,22 @@ public class SepomexZipCodeLoader {
         Map<String, Accumulator> accumulators = new HashMap<>();
         Map<String, String> stringPool = new HashMap<>();
         Map<String, String> normalizedPool = new HashMap<>();
+        Set<String> identities = new HashSet<>();
 
         try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(digestStream, charset))) {
+                new InputStreamReader(digestStream, charset.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)))) {
 
             // Skip first two lines (metadata and header)
             reader.readLine();
-            reader.readLine();
+            if (!HEADER.equals(reader.readLine())) throw new IOException("Encabezado SEPOMEX inválido");
 
             long linesProcessed = reader.lines()
-                    .filter(line -> processLine(line, accumulators, stringPool, normalizedPool))
+                    .filter(line -> processLine(line, accumulators, stringPool, normalizedPool, identities))
                     .count();
 
+            if (errorCount > 0 || linesProcessed == 0) {
+                throw new IOException("Catálogo rechazado: " + errorCount + " líneas inválidas; " + linesProcessed + " válidas");
+            }
             String checksum = HexFormat.of().formatHex(digest.digest());
             ZipCodeData data = buildIndices(accumulators, checksum, source);
 
@@ -187,6 +205,14 @@ public class SepomexZipCodeLoader {
      * despliegue (config incorrecta sin error visible).</p>
      */
     private ResolvedSource resolveSource() throws IOException {
+        if (catalogDirectory != null && !catalogDirectory.isBlank()) {
+            Path store = Path.of(catalogDirectory);
+            var manifest = JsonMapper.builder().build().readTree(store.resolve("active.json").toFile());
+            String checksum = manifest.path("current").asText();
+            if (!checksum.matches("[0-9a-f]{64}")) throw new IOException("Checksum inválido en active.json");
+            Path version = store.resolve("versions").resolve(checksum + ".txt");
+            return new ResolvedSource(Files.newInputStream(version), "catalog:" + checksum, checksum);
+        }
         boolean userConfiguredPath = filePath != null && !filePath.isBlank();
 
         if (userConfiguredPath && filePath.startsWith("classpath:")) {
@@ -219,58 +245,43 @@ public class SepomexZipCodeLoader {
         return null;
     }
 
-    private Charset detectCharset(BufferedInputStream stream) throws IOException {
-        stream.mark(CHARSET_SAMPLE_SIZE);
-        byte[] sample = new byte[CHARSET_SAMPLE_SIZE];
-        int bytesRead = stream.read(sample);
-        stream.reset();
-
-        if (bytesRead <= 0) {
-            return StandardCharsets.UTF_8;
-        }
-
-        boolean hasHighBytes = false;
-        boolean hasUtf8Sequences = false;
-
-        for (int i = 0; i < bytesRead; i++) {
-            int b = sample[i] & 0xFF;
-            if (b >= 0x80) {
-                hasHighBytes = true;
-                if ((b & 0xE0) == 0xC0 || (b & 0xF0) == 0xE0) {
-                    if (i + 1 < bytesRead && (sample[i + 1] & 0xC0) == 0x80) {
-                        hasUtf8Sequences = true;
-                    }
-                }
+    private Charset detectCharset(byte[] bytes) throws IOException {
+        if (!"auto".equalsIgnoreCase(fileEncoding)) {
+            if (!Set.of("UTF-8", "ISO-8859-1").contains(fileEncoding.toUpperCase(java.util.Locale.ROOT))) {
+                throw new IOException("Encoding admitido: auto, UTF-8 o ISO-8859-1");
             }
+            return Charset.forName(fileEncoding);
         }
-
-        if (hasHighBytes && !hasUtf8Sequences) {
-            log.debug("Detectado encoding ISO-8859-1 (bytes altos sin secuencias UTF-8)");
+        try {
+            StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes));
+            return StandardCharsets.UTF_8;
+        } catch (CharacterCodingException invalidUtf8) {
             return StandardCharsets.ISO_8859_1;
         }
-
-        if (hasUtf8Sequences) {
-            log.debug("Detectado encoding UTF-8 (secuencias UTF-8 validas encontradas)");
-            return StandardCharsets.UTF_8;
-        }
-
-        log.debug("Usando encoding por defecto ISO-8859-1 para archivo SEPOMEX");
-        return StandardCharsets.ISO_8859_1;
     }
 
     private boolean processLine(String line,
                                 Map<String, Accumulator> accumulators,
                                 Map<String, String> pool,
-                                Map<String, String> normalizedPool) {
+                                Map<String, String> normalizedPool, Set<String> identities) {
         try {
-            String[] words = PIPE_PATTERN.split(line);
+            String[] words = PIPE_PATTERN.split(line, -1);
 
-            if (words.length < MIN_COLUMNS) {
+            if (words.length != MIN_COLUMNS) {
                 handleError("Linea con formato incorrecto (columnas insuficientes): {}",
                     line.substring(0, Math.min(100, line.length())));
                 return false;
             }
 
+            for (int i = 0; i < words.length; i++) words[i] = words[i].trim();
+            if (!words[7].matches("[0-9]{2}") || !words[11].matches("[0-9]{3}") ||
+                    !words[12].matches("[0-9]{4}") || Integer.parseInt(words[7]) < 1 ||
+                    Integer.parseInt(words[7]) > 32 || words[1].isBlank() || words[2].isBlank() ||
+                    !Set.of("Urbano", "Rural", "Semiurbano").contains(words[13])) {
+                handleError("Claves oficiales o campos inválidos en CP {}", words[0]);
+                return false;
+            }
             String zipCodeKey = words[COL_ZIP_CODE].trim();
 
             if (!isValidZipCode(zipCodeKey)) {
@@ -296,9 +307,17 @@ public class SepomexZipCodeLoader {
                     canonical(words[COL_LOCALITY].trim(), pool),
                     canonical(federalEntity, pool),
                     canonical(municipality, pool),
+                    canonical(words[7].trim(), pool),
+                    canonical(words[11].trim(), pool),
                     canonical(Util.normalizeString(federalEntity), pool),
                     canonical(Util.normalizeString(municipality), pool)));
 
+            if (!acc.federalEntityCode.equals(words[7]) || !acc.municipalityCode.equals(words[11]) ||
+                    !acc.federalEntity.equals(federalEntity) || !acc.municipality.equals(municipality) ||
+                    !identities.add(zipCodeKey + ":" + words[7] + ":" + words[11] + ":" + words[12])) {
+                handleError("Ubicación contradictoria o asentamiento duplicado en CP {}", zipCodeKey);
+                return false;
+            }
             String settlementName = words[COL_SETTLEMENT_NAME].trim();
             String settlementTypeVal = words[COL_SETTLEMENT_TYPE].trim();
             String zoneTypeVal = words.length > COL_ZONE_TYPE_INDEX ?
@@ -377,7 +396,8 @@ public class SepomexZipCodeLoader {
      * Origen resuelto del catálogo: el stream a leer y una descripción legible
      * (classpath:... o ruta de archivo) para exponer como metadata de frescura.
      */
-    private record ResolvedSource(InputStream stream, String description) {
+    private record ResolvedSource(InputStream stream, String description, String expectedChecksum) {
+        ResolvedSource(InputStream stream, String description) { this(stream, description, null); }
     }
 
     /**
@@ -389,6 +409,8 @@ public class SepomexZipCodeLoader {
         private final String locality;
         private final String federalEntity;
         private final String municipality;
+        private final String federalEntityCode;
+        private final String municipalityCode;
         private final String normalizedFederalEntity;
         private final String normalizedMunicipality;
         private final List<Settlements> settlements = new ArrayList<>();
@@ -397,12 +419,16 @@ public class SepomexZipCodeLoader {
                             String locality,
                             String federalEntity,
                             String municipality,
+                            String federalEntityCode,
+                            String municipalityCode,
                             String normalizedFederalEntity,
                             String normalizedMunicipality) {
             this.zipCode = zipCode;
             this.locality = locality;
             this.federalEntity = federalEntity;
             this.municipality = municipality;
+            this.federalEntityCode = federalEntityCode;
+            this.municipalityCode = municipalityCode;
             this.normalizedFederalEntity = normalizedFederalEntity;
             this.normalizedMunicipality = normalizedMunicipality;
         }
@@ -413,6 +439,8 @@ public class SepomexZipCodeLoader {
                     .locality(locality)
                     .federalEntity(federalEntity)
                     .municipality(municipality)
+                    .federalEntityCode(federalEntityCode)
+                    .municipalityCode(municipalityCode)
                     .settlements(List.copyOf(settlements))
                     .normalizedFederalEntity(normalizedFederalEntity)
                     .normalizedMunicipality(normalizedMunicipality)

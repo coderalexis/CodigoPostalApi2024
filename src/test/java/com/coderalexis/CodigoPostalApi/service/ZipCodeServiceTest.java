@@ -20,6 +20,15 @@ import static org.junit.jupiter.api.Assertions.*;
 @ActiveProfiles("test")
 class ZipCodeServiceTest {
 
+    @Test
+    void shouldCountMunicipalitiesByStateAndOfficialCode() {
+        int total = zipCodeService.getAllFederalEntities().stream()
+                .mapToInt(com.coderalexis.CodigoPostalApi.model.FederalEntity::getMunicipalitiesCount).sum();
+        assertEquals(total, zipCodeService.getStatistics().getTotalMunicipalities());
+        assertEquals("09", zipCodeService.getZipCode("01000").getFederalEntityCode());
+        assertEquals("010", zipCodeService.getZipCode("01000").getMunicipalityCode());
+    }
+
     @Autowired
     private ZipCodeService zipCodeService;
 

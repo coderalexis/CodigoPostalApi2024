@@ -109,7 +109,8 @@ class RateLimitInterceptorTest {
         assertFalse(limited.preHandle(request, blocked, new Object()));
         assertEquals(HttpStatus.TOO_MANY_REQUESTS.value(), blocked.getStatus());
         assertEquals("0", blocked.getHeader("X-RateLimit-Remaining"));
-        assertNotNull(blocked.getHeader("X-RateLimit-Retry-After-Seconds"));
+        assertEquals(blocked.getHeader("Retry-After"), blocked.getHeader("X-RateLimit-Retry-After-Seconds"));
+        assertTrue(Long.parseLong(blocked.getHeader("Retry-After")) > 0);
         assertTrue(blocked.getContentAsString().contains("Limite de peticiones excedido"),
                 "El body debe usar el formato consistente con ErrorResponse");
     }
